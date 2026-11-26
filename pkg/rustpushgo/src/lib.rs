@@ -10,6 +10,8 @@ mod statuskitgo;
 mod statuskit_cloudkit;
 #[cfg(all(test, target_os = "macos"))] // uses local_config, which is macOS-only
 mod test_hwinfo;
+#[cfg(test)]
+mod macoun_tests;
 
 use std::{collections::HashMap, io::Cursor, path::PathBuf, str::FromStr, sync::Arc, time::Duration, sync::atomic::{AtomicU64, Ordering}};
 

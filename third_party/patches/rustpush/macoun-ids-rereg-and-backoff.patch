@@ -24,10 +24,10 @@ index 02392e1..3375d92 100644
                  .with_min_delay(Duration::from_secs(300 /* 5 mins */)),
              Duration::from_secs(300),
 diff --git a/src/ids/user.rs b/src/ids/user.rs
-index 817a504..f45dbf9 100644
+index 817a504..ba5259c 100644
 --- a/src/ids/user.rs
 +++ b/src/ids/user.rs
-@@ -92,12 +92,56 @@ impl IDSRegistration {
+@@ -92,12 +92,32 @@ impl IDSRegistration {
              let now = duration_since_epoch().as_secs() as i64;
              (self.registered_at_s + heartbeat_interval) as i64 - now
          } else {
@@ -48,7 +48,8 @@ index 817a504..f45dbf9 100644
 +/// retries (the Identity resource retries on failure). A registration less than
 +/// MACOUN_REREG_MIN_AGE_S old is not repeated, so a certificate that comes back
 +/// with under 7 days left cannot cause a reregister loop. Never later than
-+/// upstream's 300 s before expiry.
++/// upstream's 300 s before expiry. Tested from rustpushgo (macoun_tests.rs),
++/// because rustpush's own test target needs certificates that are not public.
 +pub const MACOUN_REREG_LEAD_S: i64 = 7 * 86400;
 +pub const MACOUN_REREG_MIN_AGE_S: i64 = 86400;
 +
@@ -56,31 +57,6 @@ index 817a504..f45dbf9 100644
 +    let early = expires_in_s - MACOUN_REREG_LEAD_S;
 +    let not_before = MACOUN_REREG_MIN_AGE_S - registered_ago_s;
 +    early.max(not_before).min(expires_in_s - 300)
-+}
-+
-+#[cfg(test)]
-+mod macoun_rereg_tests {
-+    use super::*;
-+
-+    #[test]
-+    fn rereg_seven_days_before_expiry() {
-+        // 45-day certificate, registered just now: rereg after 38 days.
-+        assert_eq!(macoun_rereg_in_s(45 * 86400, 0), 38 * 86400);
-+        // Under 7 days left on an old registration: rereg now.
-+        assert!(macoun_rereg_in_s(3 * 86400, 40 * 86400) <= 0);
-+    }
-+
-+    #[test]
-+    fn fresh_registration_is_not_repeated() {
-+        // A new certificate with only 5 days left waits out the minimum age.
-+        assert_eq!(macoun_rereg_in_s(5 * 86400, 60), 86400 - 60);
-+    }
-+
-+    #[test]
-+    fn never_later_than_upstream() {
-+        // Expires in an hour, registered 10 minutes ago: upstream's -300 wins.
-+        assert_eq!(macoun_rereg_in_s(3600, 600), 3300);
-+    }
 +}
 +
  
