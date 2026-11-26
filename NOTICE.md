@@ -7,8 +7,8 @@ Lineage: mautrix-imessage by Tulir Asokan (2021), ported to the bridgev2
 framework as corten-matrix by lrhodin and contributors (notably mackid1993 and
 Tae Hagen); macoun-matrix forks the last open-source snapshot of corten-matrix
 (the MPL-2.0 archive of 2026-11-01).
-It is a private, self-built variant for Linux and is not affiliated with or
-supported by the Corten-Matrix Project.
+It is an independent fork for Linux and is not affiliated with or supported
+by the Corten-Matrix Project.
 
 ## Sources
 
@@ -18,7 +18,8 @@ supported by the Corten-Matrix Project.
 | `pkg/rustpushgo/src/nac_relay.rs` | `RelayOSConfig` from corten-matrix commit `e2adc79d92f4b91fb0ef8bf16439c4411ffbb165` (2026-06-21), adapted; the relay anisette client in the same file is new | AGPL-3.0 (`LICENSES/AGPL-3.0.txt`) |
 | `tools/macoun-relay/` | Imported with history (`git subtree`) from the macoun-relay repository: `e176a98` is corten-matrix `e2adc79d92` `tools/nac-relay` and `nac-validation` verbatim; `03a5609` adds `/anisette` (AOSKit), JSON `/health`, a capped log and removes token logging. `launchd/` template is new. | AGPL-3.0 (its own `LICENSE`) |
 | `examples/monitoring/` | Written for macoun-matrix | MPL-2.0 |
-| `docs/` | Written for macoun-matrix | MPL-2.0 |
+| `docs/` | Written for macoun-matrix, except `docs/bridge-guide.md`, which is the README from the corten-matrix archive with macoun-matrix's additions | MPL-2.0 |
+| `third_party/patches/rustpush/macoun-ids-rereg-and-backoff.patch` | Written for macoun-matrix as a patch against rustpush; it quotes rustpush source as context | SSPL v1 (`LICENSES/SSPL-1.0.txt`) |
 | `tools/extract-key/` | corten-matrix `e2adc79d92`, `tools/extract-key/`; header added | AGPL-3.0 |
 | `disable_icloud_contacts` (`config.go`, `client.go`, `shared_profile.go`, example config) | The Go patches in corten-matrix `64f9d73`'s Makefile, applied directly | MPL-2.0 |
 | `third_party/patches/apple-private-apis/fallible-gsa-token-header-parsing.patch` | corten-matrix commit `64f9d73` (the public tree matching the 1.3.2 release) | MPL-2.0 |
@@ -37,17 +38,24 @@ compatible with this as a Larger Work, MPL section 3.3).
   (`cb2361c2a750ffa2047c1a64eda44c8fb8364218`), with its submodules
   (apple-private-apis `b8598d2`, clearadi-stub, OpenAbsinthe-Stub, quinn, rtc,
   rustls, rustls-platform-verifier). rustpush is licensed under the
-  **Server Side Public License v1**; its `LICENSE.exceptions` grants an MIT-style
-  exception to OpenBubbles only. Private self-hosting for one's own account is
-  the intended use here. Distributing a binary, or offering it to third parties
-  as a service, brings SSPL obligations that this combination with AGPL/MPL code
-  cannot satisfy. Do not distribute macoun-matrix binaries.
+  **Server Side Public License v1** (`LICENSES/SSPL-1.0.txt` is a copy of its
+  `LICENSE`); its `LICENSE.exceptions` grants an MIT-style exception to
+  OpenBubbles only.
 - Go modules in `go.mod` and Rust crates in `pkg/rustpushgo/Cargo.lock`, under
   their own licences.
 
-## Closed corten-matrix parts that are not here
+## Binaries
 
-- `pkg/connector/idskeys.go` (a stub in the public source): replaced by an
+This repository publishes source only. A built binary links MPL-2.0, AGPL-3.0
+and SSPL v1 code. Building and running it for your own account is the intended
+use. Distributing a binary, or offering it to third parties as a service,
+brings SSPL obligations that this combination with AGPL and MPL code cannot
+satisfy, so the project does not publish binaries and asks that you do not
+either.
+
+## corten-matrix parts that are not in its public source
+
+- `pkg/connector/idskeys.go` is a stub in the public source: replaced by an
   independent outbound limiter, see the file header.
 - `pkg/connector/hostcmd.go` (`runSelfUpdate`): left as the public stub; there is
   no self-update.
