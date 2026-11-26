@@ -289,6 +289,9 @@ func (s *cloudBackfillStore) loadRecycleBinRecords(ctx context.Context) (chats [
 // but still returns what is stored: enough to recognise known deletions, not
 // enough to conclude that anything has left the recycle bin.
 func (s *cloudBackfillStore) syncRecycleBin(ctx context.Context, pager recoverableZonePager, log zerolog.Logger) (recycleBinSnapshot, error) {
+	// One pass at a time: the seed and a restore command may ask together.
+	s.recycleBinMu.Lock()
+	defer s.recycleBinMu.Unlock()
 	var snap recycleBinSnapshot
 	if err := s.ensureRecycleBinSchema(ctx); err != nil {
 		return snap, err
@@ -364,6 +367,41 @@ func (s *cloudBackfillStore) syncRecycleBin(ctx context.Context, pager recoverab
 // bin was read. With an incomplete snapshot the deletion may simply sit in the
 // unread part, and undoing the tombstone would bridge a deleted chat's history
 // back into Matrix.
-func recycleBinMayAutoRecover(state recycleBinPortalState, snapshotComplete bool) bool {
-	return snapshotComplete && state.NeedsUndelete()
+//
+// It also means nothing for a chat deleted with delete-portal
+// (locallyDeleted): that deletion never reached Apple, so the recycle bin was
+// never going to show it.
+func recycleBinMayAutoRecover(state recycleBinPortalState, snapshotComplete, locallyDeleted bool) bool {
+	return snapshotComplete && !locallyDeleted && state.NeedsUndelete()
+}
+
+// recycleBinNow brings the local recycle-bin copy up to date and returns it,
+// for the paths outside the startup seed (restore-chat, chat recovery, the
+// debug dump). An incomplete read is returned as it is, with a log line: these
+// callers look for what is in the recycle bin, and a partial list still finds
+// most of it.
+func (c *IMClient) recycleBinNow(ctx context.Context) (recycleBinSnapshot, error) {
+	if c.client == nil || c.cloudStore == nil {
+		return recycleBinSnapshot{}, errors.New("CloudKit client or cloud store unavailable")
+	}
+	log := c.UserLogin.Log.With().Str("component", "cloud_sync").Logger()
+	snapshot, err := c.cloudStore.syncRecycleBin(ctx, c.client, log)
+	if err == nil && !snapshot.Complete {
+		log.Warn().Int("recoverable_chats", len(snapshot.Chats)).Int("recoverable_guids", len(snapshot.Entries)).
+			Msg("Recycle-bin copy could not be brought fully up to date; using what is stored")
+	}
+	return snapshot, err
+}
+
+// recoverableChats returns the chat records in Apple's recycle bin.
+func (c *IMClient) recoverableChats(ctx context.Context) ([]rustpushgo.WrappedCloudSyncChat, error) {
+	snapshot, err := c.recycleBinNow(ctx)
+	return snapshot.Chats, err
+}
+
+// recoverableMessageEntries returns the "guid|base64-metadata" entries of the
+// messages in Apple's recycle bin.
+func (c *IMClient) recoverableMessageEntries(ctx context.Context) ([]string, error) {
+	snapshot, err := c.recycleBinNow(ctx)
+	return snapshot.Entries, err
 }

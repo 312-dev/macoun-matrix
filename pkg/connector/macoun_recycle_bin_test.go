@@ -175,7 +175,7 @@ func TestRecycleBinLegacyReadUndeletesDeletedChat(t *testing.T) {
 	if !state.LooksDeleted() {
 		t.Fatalf("complete recycle bin must show the chat as deleted, got %+v", state)
 	}
-	if recycleBinMayAutoRecover(state, snap.Complete) {
+	if recycleBinMayAutoRecover(state, snap.Complete, false) {
 		t.Fatal("a chat whose newest messages are in the recycle bin must not be auto-recovered")
 	}
 }
@@ -212,7 +212,7 @@ func TestRecycleBinIncompleteSnapshotNeverAutoRecovers(t *testing.T) {
 	if !state.NeedsUndelete() {
 		t.Fatalf("fixture should look restored on a partial copy, got %+v", state)
 	}
-	if recycleBinMayAutoRecover(state, snap.Complete) {
+	if recycleBinMayAutoRecover(state, snap.Complete, false) {
 		t.Fatal("an incomplete snapshot must never undo a local deletion")
 	}
 }

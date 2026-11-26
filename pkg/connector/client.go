@@ -3367,6 +3367,10 @@ func (c *IMClient) reviveDeletedPortalShell(ctx context.Context, portalID string
 		if err := c.cloudStore.undeleteCloudChatByPortalID(ctx, portalID); err != nil {
 			return err
 		}
+		// The chat is back on purpose; a delete-portal marker no longer applies.
+		if err := c.cloudStore.clearPortalDeletedLocally(ctx, portalID); err != nil {
+			return err
+		}
 	}
 	c.recentlyDeletedPortalsMu.Lock()
 	delete(c.recentlyDeletedPortals, portalID)

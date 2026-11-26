@@ -503,7 +503,15 @@ func (c *IMClient) seedDeletedChatsFromRecycleBin(log zerolog.Logger) {
 						Int("recoverable_suffix", state.RecoverableSuffix).
 						Msg("DELETE-SEED: locally deleted chat is not shown as deleted by the part of the recycle bin read so far; keeping it deleted until the whole recycle bin has been read")
 				}
-				if recycleBinMayAutoRecover(state, snapshot.Complete) {
+				locallyDeleted, localErr := c.cloudStore.isPortalDeletedLocally(ctx, state.PortalID)
+				if localErr != nil {
+					// Unknown counts as deleted here: keeping a tombstone is
+					// the outcome that can be corrected later.
+					log.Warn().Err(localErr).Str("portal_id", state.PortalID).
+						Msg("DELETE-SEED: failed to check for a delete-portal marker; keeping the chat deleted")
+					locallyDeleted = true
+				}
+				if recycleBinMayAutoRecover(state, snapshot.Complete, locallyDeleted) {
 					undeleted, err := c.cloudStore.undeleteCloudMessagesByPortalID(ctx, state.PortalID)
 					if err != nil {
 						log.Warn().Err(err).Str("portal_id", state.PortalID).

@@ -23,6 +23,9 @@ type cloudBackfillStore struct {
 	db      *dbutil.Database
 	loginID networkid.UserLoginID
 
+	// recycleBinMu serializes syncRecycleBin passes (macoun_recycle_bin.go).
+	recycleBinMu sync.Mutex
+
 	// scrubMu serializes body-scrub passes, which the periodic ticker and
 	// post-sync housekeeping can otherwise run concurrently, and guards bridged.
 	scrubMu sync.Mutex
@@ -1610,6 +1613,10 @@ func (s *cloudBackfillStore) listDeletedPortalIDs(ctx context.Context) ([]string
 }
 
 func (s *cloudBackfillStore) setRestoreOverride(ctx context.Context, portalID string) error {
+	// A manual restore ends a delete-portal deletion (macoun_delete_portal.go).
+	if err := s.clearPortalDeletedLocally(ctx, portalID); err != nil {
+		return err
+	}
 	_, err := s.db.Exec(ctx, `
 		INSERT INTO restore_override (login_id, portal_id, updated_ts)
 		VALUES ($1, $2, $3)
