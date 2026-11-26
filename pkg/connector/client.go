@@ -665,6 +665,26 @@ type messageBuffer struct {
 	entries []bufferedMessage
 	timer   *time.Timer
 	client  *IMClient
+
+	// Test seams. nil means the client's own isCloudSyncDone and
+	// dispatchBuffered.
+	syncDoneFn func() bool
+	dispatchFn func(rustpushgo.WrappedMessage)
+}
+
+func (b *messageBuffer) syncDone() bool {
+	if b.syncDoneFn != nil {
+		return b.syncDoneFn()
+	}
+	return b.client.isCloudSyncDone()
+}
+
+func (b *messageBuffer) dispatch(msg rustpushgo.WrappedMessage) {
+	if b.dispatchFn != nil {
+		b.dispatchFn(msg)
+		return
+	}
+	b.client.dispatchBuffered(msg)
 }
 
 // add inserts a message into the buffer. While CloudKit sync is in progress,
@@ -682,7 +702,7 @@ func (b *messageBuffer) add(msg rustpushgo.WrappedMessage) {
 	// Once the data download is done, messages flow immediately so real-time
 	// messages are never silently swallowed. The initial buffer is flushed
 	// by setCloudSyncDone / onForwardBackfillDone with ordering preserved.
-	if !b.client.isCloudSyncDone() {
+	if !b.syncDone() {
 		b.mu.Unlock()
 		return
 	}
@@ -724,7 +744,7 @@ func (b *messageBuffer) flush() {
 	})
 
 	for _, e := range entries {
-		b.client.dispatchBuffered(e.msg)
+		b.dispatch(e.msg)
 	}
 }
 
