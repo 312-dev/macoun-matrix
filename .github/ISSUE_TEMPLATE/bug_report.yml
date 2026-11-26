@@ -47,3 +47,16 @@ body:
       label: Logs
       description: Relevant lines from the bridge log and, for relay problems, `relay.log` and the `/health` output.
       render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you submit
+      options:
+        - label: This happens on the latest release or on `main`.
+          required: true
+        - label: This is a bug in the bridge, not a setup question. Setup questions go in Discussions.
+          required: true
+        - label: It is not an Apple-side problem. The same thing works in Apple's own Messages app on the same Apple ID.
+          required: true
+        - label: I have read the logs I attached and removed personal data and secrets.
+          required: true
