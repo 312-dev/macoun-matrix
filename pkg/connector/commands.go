@@ -724,7 +724,7 @@ func fnRestoreChatFromCloudKit(ce *commands.Event, login *bridgev2.UserLogin, cl
 
 	// Source 1: Use recoverable chat identities directly from Apple's recycle bin.
 	if client.client != nil && client.cloudStore != nil {
-		recoverableChats, err := client.client.ListRecoverableChats()
+		recoverableChats, err := client.recoverableChats(ce.Ctx)
 		if err == nil {
 			for _, chat := range recoverableChats {
 				portalID := client.resolvePortalIDForCloudChat(chat.Participants, chat.DisplayName, chat.GroupId, chat.Style, chat.Service)
@@ -789,7 +789,7 @@ func fnRestoreChatFromCloudKit(ce *commands.Event, login *bridgev2.UserLogin, cl
 
 	// Source 2: Derive deleted portals from recoverable message metadata.
 	if client.client != nil && client.cloudStore != nil {
-		entries, err := client.client.ListRecoverableMessageGuids()
+		entries, err := client.recoverableMessageEntries(ce.Ctx)
 		if err == nil && len(entries) > 0 {
 			for _, hint := range client.buildRecoverableMessagePortalHints(ce.Ctx, entries) {
 				if seenPortalIDs[hint.PortalID] {
@@ -1200,9 +1200,9 @@ func fnRestoreDebug(ce *commands.Event) {
 	var sb strings.Builder
 	sb.WriteString("**Restore debug dump**\n\n")
 
-	// ── 1. Recycle bin (live CloudKit query) ──────────────────────────────────
-	sb.WriteString("**Recycle bin (ListRecoverableChats)**\n")
-	recycleBin, err := client.client.ListRecoverableChats()
+	// ── 1. Recycle bin (local copy, brought up to date first) ────────────────
+	sb.WriteString("**Recycle bin (local copy, synced now)**\n")
+	recycleBin, err := client.recoverableChats(ce.Ctx)
 	if err != nil {
 		sb.WriteString(fmt.Sprintf("  error: %v\n", err))
 	} else if len(recycleBin) == 0 {

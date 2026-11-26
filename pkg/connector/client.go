@@ -5261,7 +5261,7 @@ func (c *IMClient) refreshRecoveredChatMetadata(log zerolog.Logger, portalID str
 	// Deleted chats are moved to the recycle bin zone — they no longer
 	// appear in the main zone. Paging chatManateeZone would never find
 	// them, wasting hundreds of CloudKit API calls for nothing.
-	recoverableChats, err := c.client.ListRecoverableChats()
+	recoverableChats, err := c.recoverableChats(ctx)
 	if err != nil {
 		log.Warn().Err(err).Str("portal_id", portalID).
 			Msg("Failed to list recoverable chats for metadata refresh")
@@ -5476,7 +5476,7 @@ func (c *IMClient) refreshRecoveredChatMetadata(log zerolog.Logger, portalID str
 // recoverMessagesFromRecycleBin attempts to recover messages for a portal from
 // Apple's recycle bin zone. When a chat is deleted, its messages are moved to
 // recoverableMessageDeleteZone — NOT the main messageManateeZone. This function
-// uses ListRecoverableMessageGuids to find those messages and cross-references
+// uses the local recycle-bin copy to find those messages and cross-references
 // them with the local cloud_message table to undelete matching rows.
 //
 // This replaces the old approach of paging ALL of messageManateeZone (which was
@@ -5497,7 +5497,7 @@ func (c *IMClient) recoverMessagesFromRecycleBin(log zerolog.Logger, portalID st
 	ctx := context.Background()
 
 	// Get recoverable message GUIDs from the recycle bin zone.
-	entries, err := c.client.ListRecoverableMessageGuids()
+	entries, err := c.recoverableMessageEntries(ctx)
 	if err != nil {
 		log.Warn().Err(err).Str("portal_id", portalID).
 			Msg("Failed to list recoverable message GUIDs for restore")
