@@ -8216,6 +8216,11 @@ func (c *IMClient) ResolveIdentifier(ctx context.Context, identifier string, cre
 		}
 	}()
 
+	// The provisioning API hands over identifiers as the client typed them
+	// ("+14045551234", "a@b.com"). IDS only matches URIs with a scheme, and
+	// a bare number comes back as LookupFailed(6001), which reads below as
+	// "not on iMessage" for someone who is.
+	identifier = normalizeStartChatIdentifier(identifier)
 	valid := c.client.ValidateTargets([]string{identifier}, c.handle)
 	if len(valid) == 0 {
 		return nil, fmt.Errorf("user not found on iMessage: %s", identifier)

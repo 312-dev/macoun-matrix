@@ -394,8 +394,9 @@ func startChatResolveAndReply(ce *commands.Event, login *bridgev2.UserLogin, raw
 }
 
 // normalizeStartChatIdentifier accepts a raw user-typed phone or email and
-// returns the canonical `tel:+...` / `mailto:...` form ResolveIdentifier
-// expects. Strips phone-number formatting characters; lowercases emails.
+// returns the canonical `tel:+...` / `mailto:...` form IDS lookups need.
+// ResolveIdentifier applies it to every caller, the provisioning API included.
+// Strips phone-number formatting characters; lowercases emails.
 func normalizeStartChatIdentifier(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if strings.HasPrefix(raw, "tel:") || strings.HasPrefix(raw, "mailto:") {
