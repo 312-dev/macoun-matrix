@@ -151,6 +151,11 @@ groups cannot: their rooms refuse these changes.
   group when you send the first message in the new room.
 - **Rename.** Change the room name. The group is renamed for everyone. A group
   name cannot be cleared from Matrix.
+- **Unnamed groups.** A group nobody has named gets a room name built from its
+  members' contact names, which follows later roster and contact changes.
+  That name exists only on your homeserver; it is not sent to the group. Once
+  a participant names the group, or you rename the room, that name is used
+  and the built one is not brought back.
 - **Photo.** Change or remove the room avatar. The picture is cropped to a
   square and sent as the group photo.
 - **Add and remove.** Use the room's own invite and remove on a contact's

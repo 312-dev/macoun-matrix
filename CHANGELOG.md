@@ -8,6 +8,9 @@
 * Fixed members of an iMessage group who never post not appearing in the
   Matrix room. Every live group message now joins the members on Apple's
   roster.
+* Fixed an iMessage group created before its members were known staying named
+  "Group Chat". Unnamed groups are named after their members, locally only,
+  and the name follows roster and contact changes.
 * Fixed group ghosts being removed from a room whose stored roster was unknown.
 * Fixed starting a chat through the provisioning API with a bare phone number
   or email (no `tel:` or `mailto:`) failing with IDS error 6001.
