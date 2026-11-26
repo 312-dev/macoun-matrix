@@ -7,15 +7,14 @@ of [corten-matrix](https://corten-matrix.com) (Ludvig Rhodin and the
 Corten-Matrix Project contributors), built only from source that carries an
 open licence.
 
-Upstream corten-matrix releases contain closed parts: the Linux NAC and
-anisette code, an outbound IDS precheck, and a self-updater. The public source
-has stubs in their place and cannot register a Linux bridge with Apple. The
-fork replaces those parts with open code and a Mac that does the Apple-specific
-work.
+Some parts of corten-matrix releases are not in its public source: the Linux
+NAC and anisette code, an outbound IDS precheck, and a self-updater. The public
+source has stubs in their place, so on its own it cannot register a Linux
+bridge with Apple. The fork fills those places with open code and a Mac that
+does the Apple-specific work.
 
-The fork exists so that every line in the binary has a licence you can read and
-keep using. No closed code and no PolyForm-licensed code is included, linked,
-loaded at run time or required.
+Everything in the build has a licence you can read: only source under MPL-2.0,
+AGPL-3.0 or SSPL v1 is included, linked, loaded at run time or required.
 
 ## Licences
 
@@ -29,7 +28,7 @@ loaded at run time or required.
 Because AGPL code is linked into the binary, treat a built binary as AGPL-3.0.
 SSPL rustpush makes it unsuitable for distribution or for offering to other
 people as a service: build it for your own account and do not hand out
-binaries. [NOTICE.md](../NOTICE.md) has the file-level map and the source
+binaries. The project publishes source only for the same reason. [NOTICE.md](../NOTICE.md) has the file-level map and the source
 commits.
 
 ## Architecture

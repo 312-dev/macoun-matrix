@@ -38,6 +38,7 @@ defaults read /Library/Preferences/com.apple.SoftwareUpdate
 ## 2. Build and run the relay on the Mac
 
 ```bash
+git clone https://github.com/312-dev/macoun-matrix.git
 mkdir -p <relay-dir>/bin <relay-dir>/logs <relay-dir>/state
 cd macoun-matrix/tools/macoun-relay
 go build -o <relay-dir>/bin/nac-relay ./tools/nac-relay
@@ -107,6 +108,7 @@ secret; it identifies your Mac.
 ## 4. Build the bridge on Linux
 
 ```bash
+git clone https://github.com/312-dev/macoun-matrix.git
 git clone https://github.com/OpenBubbles/rustpush.git rustpush
 git -C rustpush checkout "$(cat macoun-matrix/third_party/rustpush-upstream.sha)"
 git -C rustpush -c url.https://github.com/.insteadOf=git@github.com: \
@@ -179,9 +181,8 @@ no new login is needed. Work on a **copy** first.
 1. Stop the old bridge. Copy the database (with any `-wal`/`-shm` files) and
    the whole `corten-matrix/` state directory. `keystore.plist` must come
    along: without it the bridge clears the login and forces a re-login.
-2. Back up `corten-matrix/anisette/state.plist` separately. It is in the
-   closed ClearADI format, which macoun does not use; keeping it makes a
-   rollback clean.
+2. Back up `corten-matrix/anisette/state.plist` separately. macoun does not
+   use that file; keeping it makes a rollback clean.
 3. Do not re-extract the key and do not edit it. Point the bridge at the relay
    with the `MACOUN_NAC_RELAY_*` variables instead; the database stays
    byte-identical, so rollback is just starting the old binary on the old copy.
@@ -195,11 +196,11 @@ no new login is needed. Work on a **copy** first.
    settings were not picked up.
 7. macoun adds the `macoun_outbound_limiter`, `macoun_attachment_index*` and
    `macoun_recycle_bin_*` tables and the key files `macoun-limiter.key` and
-   `macoun-attachment-index.key`; corten-matrix 1.3.x does not use any of them, so a rollback is
-   unaffected. It leaves session.json's `ids_key_cache` untouched. macoun also
-   writes `macoun_rehydrate_empty:<portal>` and `macoun_local_delete:<portal>`
-   rows into the existing `cloud_maintenance` table, which corten-matrix 1.3.x does not
-   read.
+   `macoun-attachment-index.key`; corten-matrix 1.3.x does not use any of
+   them, so a rollback is unaffected. It leaves session.json's `ids_key_cache`
+   untouched. macoun also writes `macoun_rehydrate_empty:<portal>` and
+   `macoun_local_delete:<portal>` rows into the existing `cloud_maintenance`
+   table, which corten-matrix 1.3.x does not read.
 
 ## 7. Monitoring
 
