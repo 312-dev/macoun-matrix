@@ -178,6 +178,18 @@ bridge puts the old one back at once.
 
 Those older groups can still be renamed and given a photo.
 
+Room members follow Apple's roster. Every live message in an iMessage group
+carries the sender's list of members, and the bridge joins any listed member
+who is missing from the room, so a member who never writes still shows up.
+Members leave the room only when Apple reports a participant change. A
+resync of a group whose roster the bridge has not learned yet leaves the
+members as they are.
+
+A group started on another network (an RCS or MMS group from Google Messages,
+say) is a different conversation from the iMessage group with the same
+people. An iPhone may answer in the iMessage one, so the same people can
+appear in two rooms, one per network. Neither bridge can merge them.
+
 ## FaceTime
 
 The bridge stays registered for FaceTime, so Apple keeps telling it when someone
