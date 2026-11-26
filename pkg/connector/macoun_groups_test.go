@@ -551,3 +551,184 @@ func TestMacounNewGroupArgs(t *testing.T) {
 		}
 	}
 }
+
+const (
+	groupTestUserMXID = id.UserID("@gray:example.com")
+	groupTestBotMXID  = id.UserID("@imessagebot:example.com")
+)
+
+// TestMacounGroupManagerPowerLevels: in a group whose members can be changed
+// from Matrix, the logged-in user sits one level above the ghosts and invite
+// and kick need exactly that level; everywhere else both stay locked and the
+// user stays at the room default.
+func TestMacounGroupManagerPowerLevels(t *testing.T) {
+	if invite, kick := groupMembershipLevels(true); invite != groupManagerLevel || kick != groupManagerLevel {
+		t.Fatalf("managed group: invite=%d kick=%d, want %d", invite, kick, groupManagerLevel)
+	}
+	if invite, kick := groupMembershipLevels(false); invite != plLockLevel || kick != plLockLevel {
+		t.Fatalf("other rooms: invite=%d kick=%d, want the lock level", invite, kick)
+	}
+
+	// Who is the manager.
+	client := &IMClient{
+		smsPortals: map[string]bool{"gid:sms": true},
+		UserLogin:  &bridgev2.UserLogin{UserLogin: &database.UserLogin{ID: testSQLLoginID, UserMXID: groupTestUserMXID}},
+	}
+	otherLogin := groupTestPortalObject(groupTestPortal, nil)
+	otherLogin.Receiver = "another-login"
+	for name, tc := range map[string]struct {
+		portal *bridgev2.Portal
+		want   id.UserID
+	}{
+		"iMessage group":                 {groupTestPortalObject(groupTestPortal, nil), groupTestUserMXID},
+		"direct chat":                    {groupTestPortalObject(groupTestAlice, nil), ""},
+		"carrier group":                  {groupTestPortalObject("gid:sms", nil), ""},
+		"participant-keyed legacy group": {groupTestPortalObject(groupTestAlice+","+groupTestBob+","+groupTestSelf, nil), ""},
+		"another login's portal":         {otherLogin, ""},
+		"no portal":                      {nil, ""},
+	} {
+		if got := client.groupManagerFor(tc.portal); got != tc.want {
+			t.Errorf("groupManagerFor(%s) = %q, want %q", name, got, tc.want)
+		}
+	}
+
+	// Granting, and granting only once.
+	pl := &event.PowerLevelsEventContent{Users: map[id.UserID]int{groupTestBotMXID: botPowerLevel}}
+	if !syncGroupManagerLevel(pl, groupTestBotMXID, groupTestUserMXID, groupTestUserMXID) || pl.GetUserLevel(groupTestUserMXID) != groupManagerLevel {
+		t.Fatalf("the manager must be raised to %d, has %d", groupManagerLevel, pl.GetUserLevel(groupTestUserMXID))
+	}
+	if syncGroupManagerLevel(pl, groupTestBotMXID, groupTestUserMXID, groupTestUserMXID) {
+		t.Fatal("a second pass must change nothing")
+	}
+
+	// The escalation reset leaves the manager alone at exactly that level,
+	// brings a manager who raised themselves further back to it, and treats
+	// everyone else as before.
+	const stranger = id.UserID("@mallory:example.com")
+	allowed := func(userID id.UserID) int { return groupAllowedUserLevel(userID, groupTestUserMXID, pl.UsersDefault) }
+	if demoted := demoteEscalatedUsers(pl, groupTestBotMXID, allowed); len(demoted) != 0 {
+		t.Fatalf("the manager at the manager level is not an escalation: %v", demoted)
+	}
+	pl.Users[groupTestUserMXID] = 100
+	pl.Users[stranger] = groupManagerLevel
+	demoted := demoteEscalatedUsers(pl, groupTestBotMXID, allowed)
+	if demoted[groupTestUserMXID] != groupManagerLevel || pl.GetUserLevel(groupTestUserMXID) != groupManagerLevel {
+		t.Fatalf("an escalated manager must come back to %d: %v", groupManagerLevel, demoted)
+	}
+	if _, ok := demoted[stranger]; !ok || pl.GetUserLevel(stranger) != 0 {
+		t.Fatalf("another user at the manager level is an escalation: %v", demoted)
+	}
+	if pl.GetUserLevel(groupTestBotMXID) != botPowerLevel {
+		t.Fatal("the bot must never be touched")
+	}
+
+	// The room stops being managed (it became a carrier group): the grant is
+	// taken back without treating it as an escalation.
+	if !syncGroupManagerLevel(pl, groupTestBotMXID, groupTestUserMXID, "") || pl.GetUserLevel(groupTestUserMXID) != 0 {
+		t.Fatalf("the grant must be withdrawn, user has %d", pl.GetUserLevel(groupTestUserMXID))
+	}
+	if demoted = demoteEscalatedUsers(pl, groupTestBotMXID, func(userID id.UserID) int { return groupAllowedUserLevel(userID, "", 0) }); len(demoted) != 0 {
+		t.Fatalf("nothing left to demote after the withdrawal: %v", demoted)
+	}
+}
+
+// fakeGroupRoom records what the membership handler does on the Matrix side.
+type fakeGroupRoom struct {
+	removed []id.UserID
+	notices []string
+	resyncs int
+}
+
+func (f *fakeGroupRoom) RemoveFromRoom(_ context.Context, _ *bridgev2.Portal, userID id.UserID, _ string) error {
+	f.removed = append(f.removed, userID)
+	return nil
+}
+
+func (f *fakeGroupRoom) Notice(_ context.Context, _ *bridgev2.Portal, text string) {
+	f.notices = append(f.notices, text)
+}
+
+func (f *fakeGroupRoom) ResyncMembers(*bridgev2.Portal) { f.resyncs++ }
+
+// nativeMembershipEvent is a membership event as the homeserver delivers it:
+// with the state key of the user it is about. ghostID is empty for a Matrix
+// user who is not an iMessage ghost.
+func nativeMembershipEvent(portal *bridgev2.Portal, change bridgev2.MembershipChangeType, targetMXID id.UserID, ghostID string) *bridgev2.MatrixMembershipChange {
+	evt := membershipEvent(portal, change, ghostID)
+	stateKey := targetMXID.String()
+	evt.Event = &event.Event{StateKey: &stateKey}
+	return evt
+}
+
+// TestMacounGroupNativeInviteAndKick: the room's own invite and remove buttons.
+func TestMacounGroupNativeInviteAndKick(t *testing.T) {
+	const (
+		daveMXID    = id.UserID("@imessage_tel=2b15550001004:example.com")
+		bobMXID     = id.UserID("@imessage_tel=2b15550001002:example.com")
+		malloryMXID = id.UserID("@mallory:example.com")
+	)
+	ctx, client, sender, portal := groupTestFixture(t)
+	room := &fakeGroupRoom{}
+	client.groupRoomOverride = room
+
+	// Inviting an iMessage ghost adds the person and lets the ghost join.
+	if _, err := client.HandleMatrixMembership(ctx, nativeMembershipEvent(portal, bridgev2.Invite, daveMXID, groupTestDave)); err != nil {
+		t.Fatalf("invite of a ghost: %v", err)
+	}
+	if len(sender.calls) != 1 || sender.calls[0].op != "participants" || room.resyncs != 1 || len(room.removed) != 0 {
+		t.Fatalf("invite of a ghost: calls=%+v resyncs=%d removed=%v", sender.calls, room.resyncs, room.removed)
+	}
+
+	// Inviting anyone else is undone at once and explained.
+	_, err := client.HandleMatrixMembership(ctx, nativeMembershipEvent(portal, bridgev2.Invite, malloryMXID, ""))
+	if !errors.Is(err, errOnlyGhostInvites) {
+		t.Fatalf("invite of a Matrix user: err=%v", err)
+	}
+	if len(sender.calls) != 1 || !reflect.DeepEqual(room.removed, []id.UserID{malloryMXID}) || len(room.notices) != 1 {
+		t.Fatalf("invite of a Matrix user must be withdrawn with one notice and nothing sent to Apple: calls=%d removed=%v notices=%v",
+			len(sender.calls), room.removed, room.notices)
+	}
+
+	// A ghost that cannot join (not on iMessage) is taken out of the room again.
+	sender.unreachable = map[string]bool{groupTestBob: true}
+	storedBefore, _ := client.cloudStore.getChatParticipantsByPortalID(ctx, groupTestPortal)
+	if _, err = client.HandleMatrixMembership(ctx, nativeMembershipEvent(portal, bridgev2.Kick, bobMXID, groupTestBob)); err != nil {
+		t.Fatalf("kick of a ghost: %v", err)
+	}
+	if _, err = client.HandleMatrixMembership(ctx, nativeMembershipEvent(portal, bridgev2.Invite, bobMXID, groupTestBob)); err == nil {
+		t.Fatal("invite of a ghost that is not on iMessage must fail")
+	}
+	if len(room.removed) != 2 || room.removed[1] != bobMXID || len(room.notices) != 2 {
+		t.Fatalf("a failed ghost invite must be withdrawn with a notice: removed=%v notices=%v", room.removed, room.notices)
+	}
+	if len(storedBefore) != 5 {
+		t.Fatalf("fixture: expected five stored participants before the kick, got %v", storedBefore)
+	}
+
+	// Removing a ghost when iMessage would refuse: the ghost is put back.
+	resyncsBefore := room.resyncs
+	if _, err = client.HandleMatrixMembership(ctx, nativeMembershipEvent(portal, bridgev2.Kick, daveMXID, groupTestDave)); err != nil {
+		t.Fatalf("kick down to three: %v", err)
+	}
+	if _, err = client.HandleMatrixMembership(ctx, nativeMembershipEvent(portal, bridgev2.Kick, id.UserID("@imessage_alice:example.com"), groupTestAlice)); !errors.Is(err, errGroupTooSmall) {
+		t.Fatalf("kick below three: %v", err)
+	}
+	if room.resyncs != resyncsBefore+1 || len(room.notices) != 3 {
+		t.Fatalf("a refused removal must resync the room and explain: resyncs=%d (before %d) notices=%d", room.resyncs, resyncsBefore, len(room.notices))
+	}
+
+	// Removing a Matrix user who is not part of the iMessage group needs
+	// nothing from Apple and is not an error.
+	callsBefore := len(sender.calls)
+	if _, err = client.HandleMatrixMembership(ctx, nativeMembershipEvent(portal, bridgev2.Kick, malloryMXID, "")); err != nil || len(sender.calls) != callsBefore {
+		t.Fatalf("kick of a Matrix user: err=%v calls=%d", err, len(sender.calls)-callsBefore)
+	}
+
+	// A state request was never applied to the room, so there is nothing to undo.
+	removedBefore := len(room.removed)
+	request := nativeMembershipEvent(portal, bridgev2.Invite, malloryMXID, "")
+	request.IsStateRequest = true
+	if _, err = client.HandleMatrixMembership(ctx, request); err == nil || len(room.removed) != removedBefore {
+		t.Fatalf("refused state request: err=%v removed=%d", err, len(room.removed)-removedBefore)
+	}
+}

@@ -56,6 +56,7 @@ import (
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/bridgev2/database"
 	"maunium.net/go/mautrix/bridgev2/networkid"
+	"maunium.net/go/mautrix/bridgev2/simplevent"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 
@@ -95,6 +96,7 @@ var (
 	errEmptyGroupName        = errors.New("an iMessage group name cannot be cleared from Matrix")
 	errGroupParticipants     = errors.New("the group's participant list is not known yet; it is learned from the next message in the group")
 	errUnsupportedMembership = errors.New("this membership change has no iMessage equivalent")
+	errOnlyGhostInvites      = errors.New("only iMessage contacts can be added to an iMessage group")
 )
 
 // groupSender is the part of the rustpush client the Matrix-side group
@@ -613,4 +615,81 @@ func (c *IMClient) CreateGroup(ctx context.Context, params *bridgev2.GroupCreate
 		}
 	}
 	return &bridgev2.CreateChatResponse{PortalKey: portalKey, PortalInfo: info}, nil
+}
+
+// groupManagerLevel is the power level of the group manager: one step above
+// the ghosts, which sit at users_default (0).
+const groupManagerLevel = 1
+
+// groupManagerFor returns the Matrix user who may invite and remove ghosts in
+// the portal's room, or "" when nobody may.
+func (c *IMClient) groupManagerFor(portal *bridgev2.Portal) id.UserID {
+	return ""
+}
+
+// groupAllowedUserLevel is the highest power level the bridge lets userID
+// keep in a room whose baseline (users_default) is given.
+func groupAllowedUserLevel(userID, manager id.UserID, baseline int) int {
+	return baseline
+}
+
+// groupMembershipLevels returns the invite and kick power levels of a room.
+func groupMembershipLevels(managed bool) (invite, kick int) {
+	return plLockLevel, plLockLevel
+}
+
+// syncGroupManagerLevel gives the group manager groupManagerLevel, or takes it
+// away again where there is no manager, and reports whether it changed pl.
+func syncGroupManagerLevel(pl *event.PowerLevelsEventContent, botMXID, loginUser, manager id.UserID) bool {
+	return false
+}
+
+// groupRoomOps is what the membership handler does on the Matrix side of a
+// portal room. The bridge-backed implementation is bridgeGroupRoomOps.
+type groupRoomOps interface {
+	// RemoveFromRoom takes userID out of the portal's room, whether invited or
+	// joined, as the bridge bot.
+	RemoveFromRoom(ctx context.Context, portal *bridgev2.Portal, userID id.UserID, reason string) error
+	// Notice posts a bot notice in the portal's room.
+	Notice(ctx context.Context, portal *bridgev2.Portal, text string)
+	// ResyncMembers makes the room's member list follow the stored
+	// participant list.
+	ResyncMembers(portal *bridgev2.Portal)
+}
+
+type bridgeGroupRoomOps struct{ c *IMClient }
+
+func (o bridgeGroupRoomOps) RemoveFromRoom(ctx context.Context, portal *bridgev2.Portal, userID id.UserID, reason string) error {
+	_, err := o.c.Main.Bridge.Bot.SendState(ctx, portal.MXID, event.StateMember, userID.String(), &event.Content{
+		Parsed: &event.MemberEventContent{Membership: event.MembershipLeave, Reason: reason},
+	}, time.Time{})
+	return err
+}
+
+func (o bridgeGroupRoomOps) Notice(ctx context.Context, portal *bridgev2.Portal, text string) {
+	if _, err := o.c.Main.Bridge.Bot.SendMessage(ctx, portal.MXID, event.EventMessage, &event.Content{
+		Parsed: &event.MessageEventContent{MsgType: event.MsgNotice, Body: text},
+	}, nil); err != nil {
+		zerolog.Ctx(ctx).Warn().Err(err).Stringer("room_id", portal.MXID).Msg("Failed to post group notice")
+	}
+}
+
+func (o bridgeGroupRoomOps) ResyncMembers(portal *bridgev2.Portal) {
+	o.c.UserLogin.QueueRemoteEvent(&simplevent.ChatResync{
+		EventMeta: simplevent.EventMeta{
+			Type:      bridgev2.RemoteEventChatResync,
+			PortalKey: portal.PortalKey,
+			LogContext: func(lc zerolog.Context) zerolog.Context {
+				return lc.Str("source", "group_membership")
+			},
+		},
+		GetChatInfoFunc: o.c.GetChatInfo,
+	})
+}
+
+func (c *IMClient) groupRoom() groupRoomOps {
+	if c.groupRoomOverride != nil {
+		return c.groupRoomOverride
+	}
+	return bridgeGroupRoomOps{c}
 }

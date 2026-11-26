@@ -608,10 +608,12 @@ type IMClient struct {
 	// first setCloudSyncDone; decremented by onForwardBackfillDone.
 	pendingInitialBackfills int64
 
-	// groupSenderOverride and matrixMediaOverride replace the rustpush client
-	// and the Matrix media download in the Matrix-side group operations
-	// (macoun_groups.go). nil outside tests.
+	// groupSenderOverride, groupRoomOverride and matrixMediaOverride replace
+	// the rustpush client, the Matrix room operations and the Matrix media
+	// download in the Matrix-side group operations (macoun_groups.go). nil
+	// outside tests.
 	groupSenderOverride groupSender
+	groupRoomOverride   groupRoomOps
 	matrixMediaOverride func(ctx context.Context, uri id.ContentURIString) ([]byte, error)
 
 	// providerOutage tracks whether an outage of the validation-data /
@@ -7515,6 +7517,8 @@ const (
 // ctx/portal may be nil (the chat.db path has neither in scope); the reset still
 // happens, only the m.notice is skipped.
 func (c *IMClient) hardenedPowerLevels(ctx context.Context, portal *bridgev2.Portal) *bridgev2.PowerLevelOverrides {
+	manager := c.groupManagerFor(portal)
+	inviteLevel, kickLevel := groupMembershipLevels(manager != "")
 	return &bridgev2.PowerLevelOverrides{
 		EventsDefault: ptr.Ptr(0), // ghosts + users can always send messages
 		Events: map[event.Type]int{
@@ -7527,12 +7531,18 @@ func (c *IMClient) hardenedPowerLevels(ctx context.Context, portal *bridgev2.Por
 			event.StateEncryption: plLockLevel, // encryption is bridge-managed
 			event.StateServerACL:  plLockLevel,
 		},
-		Invite: ptr.Ptr(plLockLevel), // membership is bridge-managed
-		Kick:   ptr.Ptr(plLockLevel),
+		Invite: ptr.Ptr(inviteLevel), // see groupMembershipLevels
+		Kick:   ptr.Ptr(kickLevel),
 		Ban:    ptr.Ptr(plLockLevel),
 		Redact: ptr.Ptr(plLockLevel), // can't redact others; self-unsend still works
 		Custom: func(pl *event.PowerLevelsEventContent) bool {
-			changed := c.resetEscalatedUsers(ctx, portal, pl)
+			changed := false
+			if c.UserLogin != nil {
+				changed = syncGroupManagerLevel(pl, c.Main.Bridge.Bot.GetMXID(), c.UserLogin.UserMXID, manager)
+			}
+			if c.resetEscalatedUsers(ctx, portal, pl) {
+				changed = true
+			}
 			// Name and avatar are the two pieces of room state a Matrix user
 			// may set, and only in iMessage groups (macoun_groups.go).
 			if syncGroupMetaLevels(pl, c.matrixMayEditGroupMeta(portal)) {
@@ -7573,39 +7583,50 @@ func (c *IMClient) powerLevelsForMemberSync(ctx context.Context, portal *bridgev
 	return c.hardenedPowerLevels(ctx, portal)
 }
 
+// demoteEscalatedUsers lowers every user who sits above the level they are
+// allowed (allowed(userID)) to that level and returns the users it lowered
+// with the level each now has. The bot is never touched.
+func demoteEscalatedUsers(pl *event.PowerLevelsEventContent, botMXID id.UserID, allowed func(id.UserID) int) map[id.UserID]int {
+	// Snapshot the user IDs so we don't mutate the map mid-range.
+	var userIDs []id.UserID
+	for userID := range pl.Users {
+		userIDs = append(userIDs, userID)
+	}
+	demoted := make(map[id.UserID]int)
+	for _, userID := range userIDs {
+		if userID == botMXID {
+			continue
+		}
+		level := allowed(userID)
+		if pl.GetUserLevel(userID) <= level {
+			continue
+		}
+		// The bot sits at 9001, so this reset always succeeds against a user.
+		if pl.EnsureUserLevelAs(botMXID, userID, level) {
+			demoted[userID] = level
+		}
+	}
+	return demoted
+}
+
 // resetEscalatedUsers is the Custom power-level hook from hardenedPowerLevels.
-// It demotes any non-bot user whose level was raised above the room baseline
-// (users_default) back down to that baseline, and — when a room is known and the
-// per-room+user rate limit allows — posts one m.notice. The baseline is also
-// exactly the level the user had before they escalated, since the bridge never
-// grants normal users an explicit power-level entry. Returns true if it modified
-// the power-level content, so the framework re-sends the event.
+// It demotes any non-bot user whose level was raised above the level the
+// bridge allows them back down to that level, and — when a room is known —
+// posts one m.notice per demoted user. The allowed level is the room baseline
+// (users_default), which is also the level a user had before they escalated;
+// the one user the bridge grants more is the group manager of a portal whose
+// members can be changed from Matrix (groupManagerFor). Returns true if it
+// modified the power-level content, so the framework re-sends the event.
 func (c *IMClient) resetEscalatedUsers(ctx context.Context, portal *bridgev2.Portal, pl *event.PowerLevelsEventContent) bool {
 	if pl == nil {
 		return false
 	}
 	botMXID := c.Main.Bridge.Bot.GetMXID()
 	baseline := pl.UsersDefault
-
-	// Snapshot the user IDs so we don't mutate the map mid-range.
-	var userIDs []id.UserID
-	for userID := range pl.Users {
-		userIDs = append(userIDs, userID)
-	}
-
-	var demoted []id.UserID
-	for _, userID := range userIDs {
-		if userID == botMXID {
-			continue
-		}
-		if pl.GetUserLevel(userID) <= baseline {
-			continue
-		}
-		// The bot sits at 9001, so this reset always succeeds against a user.
-		if pl.EnsureUserLevelAs(botMXID, userID, baseline) {
-			demoted = append(demoted, userID)
-		}
-	}
+	manager := c.groupManagerFor(portal)
+	demoted := demoteEscalatedUsers(pl, botMXID, func(userID id.UserID) int {
+		return groupAllowedUserLevel(userID, manager, baseline)
+	})
 	if len(demoted) == 0 {
 		return false
 	}
@@ -7616,13 +7637,13 @@ func (c *IMClient) resetEscalatedUsers(ctx context.Context, portal *bridgev2.Por
 		if ctx != nil {
 			notifyCtx = context.WithoutCancel(ctx)
 		}
-		body := fmt.Sprintf("⚠️ Power-level changes are disabled in bridge chats. Your power level remains at %d.", baseline)
-		for _, userID := range demoted {
+		for userID, level := range demoted {
+			body := fmt.Sprintf("⚠️ Power-level changes are disabled in bridge chats. Your power level remains at %d.", level)
 			c.UserLogin.Log.Info().
 				Stringer("user_id", userID).
 				Stringer("room_id", roomID).
-				Int("baseline", baseline).
-				Msg("Reset escalated Matrix power level back to room default")
+				Int("level", level).
+				Msg("Reset escalated Matrix power level back to the level the bridge allows")
 			go func() {
 				if _, err := c.Main.Bridge.Bot.SendMessage(notifyCtx, roomID, event.EventMessage, &event.Content{
 					Parsed: &event.MessageEventContent{MsgType: event.MsgNotice, Body: body},
