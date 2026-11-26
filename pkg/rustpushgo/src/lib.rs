@@ -3,6 +3,8 @@ pub mod util;
 pub mod local_config;
 #[cfg(all(not(target_os = "macos"), feature = "anisette-remote-v3"))]
 pub mod anisette;
+#[cfg(feature = "hardware-key")]
+mod nac_relay;
 mod ids_guard;
 mod statuskitgo;
 mod statuskit_cloudkit;
@@ -4847,8 +4849,8 @@ fn _create_config_from_hardware_key_inner(base64_key: String, device_id: Option<
     // Local wire-compatible struct: MacOSConfig only has
     // inner/version/protocol_version/device_id/icloud_ua/aoskit_version/udid.
     // We parse the hardware-key JSON into a local struct that holds everything
-    // and then split. The clean-room native-nac-rust path produces validation
-    // data from these fields on every platform — there is no relay.
+    // and then split. Validation data comes from the NAC relay when one is
+    // configured (RelayFields below), otherwise from open-absinthe.
     #[derive(Deserialize)]
     struct FullHardwareKey {
         #[serde(default)]
@@ -4879,6 +4881,19 @@ fn _create_config_from_hardware_key_inner(base64_key: String, device_id: Option<
     }
     let json_bytes = STANDARD.decode(&clean_key)
         .map_err(|e| WrappedError::GenericError { msg: format!("Invalid base64: {}", e) })?;
+
+    // NAC relay fields written by the relay-era extract-key tool. Parsed on
+    // their own so every key shape below keeps its existing handling.
+    #[derive(Deserialize, Default)]
+    struct RelayFields {
+        #[serde(default)]
+        nac_relay_url: Option<String>,
+        #[serde(default)]
+        relay_token: Option<String>,
+        #[serde(default)]
+        relay_cert_fp: Option<String>,
+    }
+    let relay_fields: RelayFields = serde_json::from_slice(&json_bytes).unwrap_or_default();
 
     // Try parsing as FullHardwareKey first (extract-key tool output). Fall
     // back to bare HardwareConfig for legacy keys that are just the hw blob.
@@ -4979,8 +4994,21 @@ fn _create_config_from_hardware_key_inner(base64_key: String, device_id: Option<
         udid: Some(device_id),
     });
 
-    // Coerce the concrete MacOSConfig into the trait object the wrapper holds.
-    let config: Arc<dyn OSConfig> = config;
+    // With a NAC relay configured (in the key or through MACOUN_NAC_RELAY_*),
+    // validation data comes from the Mac running tools/nac-relay; see
+    // nac_relay.rs. Without one, MacOSConfig's own NAC path is used, which in a
+    // Linux build without native NAC fails at registration.
+    let config: Arc<dyn OSConfig> = match nac_relay::resolve(
+        relay_fields.nac_relay_url,
+        relay_fields.relay_token,
+        relay_fields.relay_cert_fp,
+    ) {
+        Some(relay) => {
+            info!("Hardware key: validation data from NAC relay {}", relay.url);
+            Arc::new(nac_relay::RelayOSConfig::new(config, relay))
+        }
+        None => config,
+    };
     Ok(Arc::new(WrappedOSConfig {
         config,
     }))

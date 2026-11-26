@@ -1,8 +1,9 @@
 //! Legacy Linux anisette wrapper around `RemoteAnisetteProviderV3`.
 //!
-//! This module is compiled only with rustpushgo's `anisette-remote-v3` fallback
-//! feature. The public/default Linux path uses omnisette's clean-room
-//! `ClearADIClient` instead.
+//! This module is compiled only with rustpushgo's `anisette-remote-v3` feature.
+//! The upstream release Linux build uses the closed clean-room `ClearADIClient`
+//! instead; macoun-matrix builds Linux with this module, because that client
+//! is not in the public source.
 //!
 //! The `RemoteAnisetteProviderV3` provisioning has three bugs we work around here:
 //!   1. The `ProvisionInput` enum is missing `EndProvisioningError`, so a
@@ -44,7 +45,22 @@ use log::{error, info, warn};
 use omnisette::remote_anisette_v3::RemoteAnisetteProviderV3;
 use omnisette::{AnisetteError, AnisetteProvider, LoginClientInfo};
 
-const ANISETTE_URL: &str = "https://ani.sidestore.io";
+/// Anisette v3 server used when MACOUN_ANISETTE_URL is unset: SideStore's
+/// public instance. Set MACOUN_ANISETTE_URL to a self-hosted
+/// anisette-v3-server to keep the provisioning traffic off third parties.
+const DEFAULT_ANISETTE_URL: &str = "https://ani.sidestore.io";
+const ANISETTE_URL_ENV: &str = "MACOUN_ANISETTE_URL";
+
+fn anisette_url() -> String {
+    match std::env::var(ANISETTE_URL_ENV) {
+        Ok(v) if !v.trim().is_empty() => v.trim().trim_end_matches('/').to_string(),
+        _ => {
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| warn!("anisette: {} is unset, using the public server {}", ANISETTE_URL_ENV, DEFAULT_ANISETTE_URL));
+            DEFAULT_ANISETTE_URL.to_string()
+        }
+    }
+}
 const PROVISION_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_RETRIES: usize = 3;
 
@@ -80,7 +96,7 @@ impl AnisetteProvider for BridgeAnisetteProvider {
                 // Fresh provider each attempt — it reads state from disk so a
                 // cleared state.plist forces re-provisioning.
                 let mut upstream = RemoteAnisetteProviderV3::new(
-                    ANISETTE_URL.to_string(),
+                    anisette_url(),
                     self.info.clone(),
                     self.state_path.clone(),
                 );

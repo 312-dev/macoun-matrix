@@ -1,4 +1,4 @@
-// graft: test for the outbound rich-link envelope (vanishing-message bug).
+// macoun-matrix: test for the outbound rich-link envelope (vanishing-message bug).
 // SPDX-License-Identifier: MPL-2.0
 
 package connector
