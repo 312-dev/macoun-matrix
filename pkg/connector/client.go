@@ -616,6 +616,16 @@ type IMClient struct {
 	groupRoomOverride   groupRoomOps
 	matrixMediaOverride func(ctx context.Context, uri id.ContentURIString) ([]byte, error)
 
+	// remoteEventOverride receives the events syncLiveGroupRoomMembers would
+	// queue to bridgev2. nil outside tests.
+	remoteEventOverride func(evt bridgev2.RemoteEvent)
+
+	// liveGroupRosters holds, per gid: portal, the roster of the last live
+	// message whose members were synced into the Matrix room, so that only a
+	// changed roster costs a member sync.
+	liveGroupRosters   map[string]string
+	liveGroupRostersMu sync.Mutex
+
 	// providerOutage tracks whether an outage of the validation-data /
 	// anisette provider has been reported as a bridge state.
 	providerOutage providerOutageTracker
@@ -3483,6 +3493,7 @@ func (c *IMClient) handleMessage(log zerolog.Logger, msg rustpushgo.WrappedMessa
 	// insert-once roster) the next time anyone in the group sends a message.
 	if !msg.IsStoredMessage {
 		c.persistGroupParticipantsIfChanged(string(portalKey.ID), msg.Participants)
+		c.syncLiveGroupRoomMembers(portalKey, msg.Participants)
 	}
 
 	// Eagerly learn sender-handle → portal mapping for StatusKit presence
@@ -12203,6 +12214,75 @@ func (c *IMClient) persistGroupParticipantsIfChanged(portalID string, participan
 				Msg("group roster sync: refreshed stored participants (membership changed)")
 		}
 	}(portalID, normalized)
+}
+
+// syncLiveGroupRoomMembers brings the Matrix room of a gid: group in line
+// with the roster a live message carries, by joining the ghost of every
+// listed member. Without it a member stays out of the room until they send
+// something themselves (bridgev2 joins only a message's sender), and a member
+// who never sends is never shown, even though Apple delivers the group to
+// them and the bridge sends to them.
+//
+// The sync only adds members: a message's roster is the sender's view, and a
+// removal arrives as a participant-change message that handleParticipantChange
+// syncs with a full list. Only a roster that differs from the last one synced
+// for the portal in this process is queued; bridgev2 skips members who are
+// already joined. If the portal has no room yet the change is dropped and
+// GetChatInfo supplies the members when the room is created.
+func (c *IMClient) syncLiveGroupRoomMembers(portalKey networkid.PortalKey, participants []string) {
+	pid := string(portalKey.ID)
+	if !strings.HasPrefix(pid, "gid:") {
+		return
+	}
+	seen := make(map[string]bool, len(participants))
+	roster := make([]string, 0, len(participants))
+	others := 0
+	for _, p := range participants {
+		n := normalizeIdentifierForPortalID(p)
+		if n == "" || seen[n] {
+			continue
+		}
+		seen[n] = true
+		roster = append(roster, n)
+		if !c.isMyHandle(n) {
+			others++
+		}
+	}
+	if len(roster) < 2 || others == 0 {
+		return
+	}
+	sort.Strings(roster)
+	rosterKey := strings.Join(roster, ",")
+
+	c.liveGroupRostersMu.Lock()
+	if c.liveGroupRosters == nil {
+		c.liveGroupRosters = make(map[string]string)
+	}
+	if c.liveGroupRosters[pid] == rosterKey {
+		c.liveGroupRostersMu.Unlock()
+		return
+	}
+	c.liveGroupRosters[pid] = rosterKey
+	c.liveGroupRostersMu.Unlock()
+
+	members := c.groupChatMemberList(roster)
+	members.IsFull = false
+	members.ExcludeChangesFromTimeline = true
+	evt := &simplevent.ChatInfoChange{
+		EventMeta: simplevent.EventMeta{
+			Type:      bridgev2.RemoteEventChatInfoChange,
+			PortalKey: portalKey,
+			LogContext: func(lc zerolog.Context) zerolog.Context {
+				return lc.Str("portal_id", pid).Str("source", "live_group_roster")
+			},
+		},
+		ChatInfoChange: &bridgev2.ChatInfoChange{MemberChanges: members},
+	}
+	if c.remoteEventOverride != nil {
+		c.remoteEventOverride(evt)
+		return
+	}
+	c.UserLogin.QueueRemoteEvent(evt)
 }
 
 // resolveGroupMembers returns the participant list for a group portal.
