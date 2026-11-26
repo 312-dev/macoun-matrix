@@ -8479,10 +8479,22 @@ func (c *IMClient) FetchMessages(ctx context.Context, params bridgev2.FetchMessa
 		// clear those bodies. Rehydrating there would re-deliver messages the
 		// room already has, and the log line would cry loss on a healthy portal.
 		if len(allMessages) == 0 && totalRows > 0 && !hasCursor {
-			// Only worth a CloudKit round trip if scrubbed bodies are what we
-			// are looking at. The check is over rows already in memory — no
-			// extra query, per the one-writer SQLite pool.
-			if anyScrubbedDeliverable(allRows) {
+			// A room that stays empty comes back here on every start (bridgev2
+			// asks for a forward backfill whenever CloudKit rows exist and the
+			// room has no message). When the last rehydrate recovered nothing
+			// and no row of the portal has been written since, CloudKit has
+			// nothing more to give and the round trip (un-scrub every row,
+			// several targeted fetches, re-scrub) is skipped.
+			knownEmpty, knownErr := c.cloudStore.rehydrateKnownEmpty(ctx, portalID)
+			if knownErr != nil {
+				log.Warn().Err(knownErr).Str("portal_id", portalID).Msg("Forward backfill: could not check for an earlier empty rehydrate")
+			}
+			if knownEmpty {
+				log.Info().Str("portal_id", portalID).Int("db_rows", totalRows).
+					Msg("Forward backfill: 0 deliverable messages and an earlier CloudKit rehydrate recovered nothing; not asking CloudKit again until the portal gets new rows")
+			} else if anyScrubbedDeliverable(allRows) {
+				// Only worth a CloudKit round trip if scrubbed bodies are what
+				// we are looking at. The check is over rows already in memory.
 				log.Warn().Str("portal_id", portalID).Int("db_rows", totalRows).
 					Msg("Forward backfill: 0 deliverable messages from body-scrubbed rows — attempting one CloudKit rehydrate before marking done")
 				if c.rehydrateScrubbedPortal(ctx, *log, portalID) {
@@ -8503,6 +8515,11 @@ func (c *IMClient) FetchMessages(ctx context.Context, params bridgev2.FetchMessa
 					// is idempotent in bridgev2 (same reaction id, and a remove
 					// of an absent reaction is a no-op); looping would not be.
 					allMessages = c.cloudRowsToBackfillMessages(ctx, allRows, groupDisplayName)
+				}
+				if len(allMessages) == 0 {
+					if noteErr := c.cloudStore.noteRehydrateFoundNothing(context.Background(), portalID); noteErr != nil {
+						log.Warn().Err(noteErr).Str("portal_id", portalID).Msg("Forward backfill: failed to record the empty rehydrate")
+					}
 				}
 			}
 			if len(allMessages) == 0 {
