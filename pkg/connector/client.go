@@ -3817,7 +3817,11 @@ func (c *IMClient) handleMessage(log zerolog.Logger, msg rustpushgo.WrappedMessa
 					*data.Attachment.MmcsDescriptorJson != "" {
 					c.enqueuePendingMMCSRecovery(ctx, portal, data)
 				}
-				return convertAttachment(ctx, portal, intent, data, c.Main.Config.VideoTranscoding, c.Main.Config.HEICConversion, c.Main.Config.HEICJPEGQuality)
+				cm, err := convertAttachment(ctx, portal, intent, data, c.Main.Config.VideoTranscoding, c.Main.Config.HEICConversion, c.Main.Config.HEICJPEGQuality)
+				if err == nil {
+					applyIMessageEffect(cm, data.WrappedMessage.Effect)
+				}
+				return cm, err
 			},
 		})
 	}
@@ -12834,6 +12838,7 @@ func convertMessage(ctx context.Context, portal *bridgev2.Portal, intent bridgev
 		}
 		cm.ReplyTo = chatDBReplyTarget(*msg.ReplyGuid, bp)
 	}
+	applyIMessageEffect(cm, msg.Effect)
 
 	return cm, nil
 }
