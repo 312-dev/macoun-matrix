@@ -68,7 +68,11 @@ names these variables. There is no built-in public fallback.
 - Failure: any non-2xx status.
 - Called whenever the bridge needs fresh anisette (results are cached for 60
   seconds): at startup, at Apple ID token refreshes (about 7 a day), and on
-  CloudKit and iCloud calls.
+  CloudKit and iCloud calls. A run of CloudKit requests longer than a minute
+  therefore asks about once a minute for as long as it lasts, and an idle
+  bridge does not ask at all. The 60 seconds are upstream's choice in
+  omnisette (`ArcAnisetteClient::get_headers`); the headers carry a one-time
+  password, so the bridge does not stretch it.
 
 ### `GET <base>/health`
 

@@ -74,3 +74,40 @@ the relay. These do:
 
 So the Mac needs to be up most of the time, but a nap of hours, or a reboot,
 does not break messaging.
+
+## Startup: what incoming messages wait for
+
+On every start the bridge syncs with CloudKit before it lets incoming messages
+through. Three things have to be protected while that runs: a live message
+must not reach a room ahead of history that forward backfill is about to
+insert (the backfill skips everything older than the newest message in the
+room), a message must not put content into or re-create a chat the user
+deleted, and a chat without a room gets its room and history from the portal
+pass first. Typing notifications are never held.
+
+The startup pass, in order:
+
+1. Attachment zone. The bridge keeps an encrypted index of the zone
+   (`macoun_attachment_index`), so it only asks CloudKit for attachment records
+   added since the last pass. Only the first pass after an upgrade or a full
+   re-sync reads the whole zone.
+2. Chats, then messages, from their saved CloudKit positions.
+3. Deleted-chat seed. The bridge keeps a copy of Apple's recycle bin
+   (`macoun_recycle_bin_record`) and reads only the changes since the last
+   pass. A locally recorded chat deletion is undone only when the whole recycle
+   bin has been read and no longer shows the chat as deleted.
+4. From here, messages for chats that have a room, are not deleted and have no
+   CloudKit history waiting are delivered as they arrive.
+5. Portal pass: rooms are created and forward backfill is queued. Messages for
+   chats that are deleted, have no room yet, or have CloudKit history waiting
+   are held until this pass and its backfills finish, as upstream holds every
+   message.
+
+On an install that has synced before, steps 1 to 3 are a handful of CloudKit
+requests. The first start with a build that has the index and the recycle-bin
+copy reads both in full once; on an account with a long recycle-bin history
+that one start takes longer than the ones before it.
+
+Fewer CloudKit requests also mean fewer anisette requests to the Mac: headers
+are fetched at most once a minute, and only while something is talking to
+Apple ID or iCloud.

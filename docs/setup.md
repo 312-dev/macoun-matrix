@@ -151,6 +151,18 @@ The outbound limiter keeps its state in a new table, `macoun_outbound_limiter`,
 encrypted with `macoun-limiter.key` in the state directory (created on first
 use).
 
+Two more sets of tables make starts fast (see "Startup" in
+[overview.md](overview.md)); both are created on first use:
+
+- `macoun_attachment_index` and `macoun_attachment_index_state`: the CloudKit
+  attachment zone (record names, file metadata and the per-attachment Ford
+  keys), each row encrypted with `macoun-attachment-index.key` in the state
+  directory. If the key file is lost the index is rebuilt from CloudKit on the
+  next start.
+- `macoun_recycle_bin_record` and `macoun_recycle_bin_zone`: a copy of Apple's
+  recycle bin (message GUIDs, chat identifiers and participants, timestamps;
+  no message text) with the CloudKit position it was read up to.
+
 Anisette comes from the same relay. There is no public anisette fallback: with
 no source configured, anisette calls fail with an error. See
 [provider-contract.md](provider-contract.md) for using another provider.
@@ -181,9 +193,12 @@ no new login is needed. Work on a **copy** first.
 6. Check the start log for `macoun-matrix starting` and `Hardware key:
    validation data from NAC relay`. If the second is missing, the relay
    settings were not picked up.
-7. macoun adds the `macoun_outbound_limiter` table and `macoun-limiter.key`;
-   corten-matrix 1.3.x does not use either, so a rollback is unaffected. It leaves session.json's
-   `ids_key_cache` untouched.
+7. macoun adds the `macoun_outbound_limiter`, `macoun_attachment_index*` and
+   `macoun_recycle_bin_*` tables and the key files `macoun-limiter.key` and
+   `macoun-attachment-index.key`; corten-matrix 1.3.x does not use any of them, so a rollback is
+   unaffected. It leaves session.json's `ids_key_cache` untouched. macoun also
+   writes `macoun_rehydrate_empty:<portal>` rows into the existing
+   `cloud_maintenance` table, which corten-matrix 1.3.x does not read.
 
 ## 7. Monitoring
 
