@@ -149,3 +149,23 @@ func TestOutboundEffectRefusals(t *testing.T) {
 		t.Errorf("SMS outbound text = %q, want plain text", sms)
 	}
 }
+
+// A photo or video can carry an effect as well as text: the key on an
+// m.image/m.video/m.file event goes to send_attachment as the envelope alone.
+func TestOutboundAttachmentEffect(t *testing.T) {
+	ctx := context.Background()
+	slam := map[string]any{imessageEffectKey: "com.apple.MobileSMS.expressivesend.impact"}
+	got := outboundAttachmentEffect(ctx, slam, false)
+	if got == nil || *got != "\x00FX\x01com.apple.MobileSMS.expressivesend.impact\x00" {
+		t.Fatalf("outboundAttachmentEffect = %v", got)
+	}
+	if got := outboundAttachmentEffect(ctx, slam, true); got != nil {
+		t.Fatalf("SMS attachment kept the effect: %q", *got)
+	}
+	if got := outboundAttachmentEffect(ctx, map[string]any{imessageEffectKey: "com.example.nope"}, false); got != nil {
+		t.Fatalf("unknown effect kept: %q", *got)
+	}
+	if got := outboundAttachmentEffect(ctx, nil, false); got != nil {
+		t.Fatalf("no effect asked for, got %q", *got)
+	}
+}

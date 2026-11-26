@@ -65,3 +65,19 @@ fn macoun_effect_envelope_absent_or_malformed() {
         assert_eq!(rest, text);
     }
 }
+
+#[test]
+fn macoun_attachment_effect_and_subject() {
+    use crate::attachment_effect_and_subject;
+    // The Go side passes the envelope alone as send_attachment's body.
+    let (effect, subject) = attachment_effect_and_subject(Some("\u{0}FX\u{1}com.apple.MobileSMS.expressivesend.impact\u{0}".to_string()));
+    assert_eq!(effect.as_deref(), Some("com.apple.MobileSMS.expressivesend.impact"));
+    assert_eq!(subject, None);
+    // Text after the envelope stays the subject, as a body without one does.
+    let (effect, subject) = attachment_effect_and_subject(Some("\u{0}FX\u{1}com.apple.messages.effect.CKHeartEffect\u{0}Hi".to_string()));
+    assert_eq!(effect.as_deref(), Some("com.apple.messages.effect.CKHeartEffect"));
+    assert_eq!(subject.as_deref(), Some("Hi"));
+    assert_eq!(attachment_effect_and_subject(Some("Hi".to_string())), (None, Some("Hi".to_string())));
+    assert_eq!(attachment_effect_and_subject(Some(String::new())), (None, None));
+    assert_eq!(attachment_effect_and_subject(None), (None, None));
+}
