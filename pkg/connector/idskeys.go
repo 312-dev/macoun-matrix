@@ -169,7 +169,7 @@ func (c *IMClient) portalHasHistory(ctx context.Context, portal *bridgev2.Portal
 
 func errOutboundLimited(reason string) error {
 	return bridgev2.WrapErrorInStatus(
-		errors.New("not sent: outbound limit reached ("+reason+"). Wait a little and send again")).
+		errors.New("not sent: outbound limit reached (" + reason + "). Wait a little and send again")).
 		WithIsCertain(true).
 		WithErrorAsMessage().
 		WithSendNotice(true).
