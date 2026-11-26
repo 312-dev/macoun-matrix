@@ -18,21 +18,22 @@ jobs:
     name: Go tests (no Rust library)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libolm-dev
-      # These packages do not link librustpushgo, so they need no rustpush checkout.
-      - run: go vet ./imessage/... ./ipc/... ./pkg/cli/... ./pkg/bbctl/... ./pkg/dbowner/...
-      - run: go test ./imessage/... ./ipc/... ./pkg/cli/... ./pkg/bbctl/... ./pkg/dbowner/...
+      # These packages do not import pkg/connector, so they need neither
+      # librustpushgo nor a rustpush checkout. The rest is tested by the
+      # bridge job.
+      - run: go vet ./imessage/... ./ipc/... ./pkg/bbctl/... ./pkg/dbowner/...
+      - run: go test ./imessage/... ./ipc/... ./pkg/bbctl/... ./pkg/dbowner/...
 
   relay:
     name: Relay and extract-key build (macOS)
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: tools/macoun-relay/go.mod
       - run: go build -o /tmp/nac-relay ./tools/nac-relay
@@ -45,7 +46,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           path: macoun-matrix
       - name: Check out rustpush at the pinned commit
