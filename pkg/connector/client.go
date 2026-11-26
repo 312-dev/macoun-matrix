@@ -6518,7 +6518,14 @@ func (c *IMClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Matrix
 	// Rust-side send_with_flap_retry handles SendTimedOut retry with a stable
 	// UUID (lib.rs:~7373). No Go-side retry here — a retry would generate a
 	// fresh MessageInst and orphan delivery receipts for the first attempt.
-	uuid, err := c.client.SendMessage(conv, outbound[0], nil, c.handle, replyGuid, replyPart, nil)
+	// An iMessage effect rides on the first part only; continuation chunks
+	// go out plain.
+	var rawContent map[string]any
+	if msg.Event != nil {
+		rawContent = msg.Event.Content.Raw
+	}
+	first := outboundTextWithEffect(ctx, rawContent, conv.IsSms, outbound[0])
+	uuid, err := c.client.SendMessage(conv, first, nil, c.handle, replyGuid, replyPart, nil)
 	if err != nil {
 		// rustpush retried an unreachable iMessage as SMS and found no relay to
 		// carry it. Surface the same explanation as the pre-send guard rather than
