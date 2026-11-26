@@ -22,6 +22,7 @@ supported by Apple Inc. or the Corten-Matrix Project.
 | Images, video, audio, files, voice messages | yes | yes |
 | Replies | yes | yes |
 | Reactions (tapbacks) | yes | yes |
+| Bubble and screen effects ([docs/effects.md](docs/effects.md)) | yes, text only | yes |
 | Edits | yes | yes |
 | Unsend / redaction | yes | yes |
 | Read receipts | yes | yes |
@@ -122,6 +123,7 @@ There are no binary releases; see [Licence](#licence) for why.
 | [docs/setup.md](docs/setup.md) | Step by step: relay, hardware key, build, config, migrating a corten-matrix 1.3.x login, monitoring, upgrades, troubleshooting |
 | [docs/provider-contract.md](docs/provider-contract.md) | The HTTP contract, to plug in your own validation-data or anisette provider |
 | [docs/bridge-guide.md](docs/bridge-guide.md) | Bridge commands, groups, FaceTime notices, media conversion, privacy and the config options |
+| [docs/effects.md](docs/effects.md) | The content key and Apple effect ids for bubble and screen effects, both directions |
 | [Wiki](https://github.com/312-dev/macoun-matrix/wiki) | The same material arranged by task, plus a FAQ |
 | [NOTICE.md](NOTICE.md) | File-level provenance and licences |
 

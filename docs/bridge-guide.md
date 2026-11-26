@@ -190,6 +190,17 @@ say) is a different conversation from the iMessage group with the same
 people. An iPhone may answer in the iMessage one, so the same people can
 appear in two rooms, one per network. Neither bridge can merge them.
 
+## Effects
+
+iMessage bubble effects (Slam, Loud, Gentle, Invisible Ink) and screen effects
+(Echo, Spotlight, Balloons, Confetti, Love, Lasers, Fireworks, Celebration,
+Shooting Star) are bridged both ways through one content key on the message,
+`com.beeper.imessage.effect`, whose value is Apple's effect id (the key Beeper's
+iMessage bridge uses). The text is unchanged; invisible ink also arrives as a
+Matrix spoiler. To send one, set the key on an outgoing text message. Effects
+on outgoing attachments and SMS are not sent. Ids, examples and limits:
+[effects.md](effects.md).
+
 ## FaceTime
 
 The bridge stays registered for FaceTime, so Apple keeps telling it when someone
