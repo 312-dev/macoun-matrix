@@ -27,3 +27,19 @@ fn macoun_rereg_never_later_than_upstream() {
     // Expires in an hour, registered 10 minutes ago: upstream's -300 s wins.
     assert_eq!(macoun_rereg_in_s(3600, 600), 3300);
 }
+
+#[test]
+fn macoun_provider_outage_mask_tracks_latest_result_per_kind() {
+    use crate::{provider_outage_mask, record_provider_result, PROVIDER_ANISETTE, PROVIDER_VALIDATION_DATA};
+    assert_eq!(provider_outage_mask(), 0);
+    record_provider_result(PROVIDER_ANISETTE, false);
+    record_provider_result(PROVIDER_ANISETTE, false);
+    assert_eq!(provider_outage_mask(), PROVIDER_ANISETTE);
+    record_provider_result(PROVIDER_VALIDATION_DATA, false);
+    assert_eq!(provider_outage_mask(), PROVIDER_ANISETTE | PROVIDER_VALIDATION_DATA);
+    // One kind recovering does not clear the other.
+    record_provider_result(PROVIDER_ANISETTE, true);
+    assert_eq!(provider_outage_mask(), PROVIDER_VALIDATION_DATA);
+    record_provider_result(PROVIDER_VALIDATION_DATA, true);
+    assert_eq!(provider_outage_mask(), 0);
+}

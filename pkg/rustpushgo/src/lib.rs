@@ -164,6 +164,35 @@ pub fn register_ford_key(key: Vec<u8>) {
     debug!("register_ford_key: cached Ford key for dedup fallback (size={})", size);
 }
 
+/// Provider call kinds tracked by `record_provider_result`; each is one bit of
+/// `provider_outage_mask`.
+pub(crate) const PROVIDER_VALIDATION_DATA: u64 = 1;
+pub(crate) const PROVIDER_ANISETTE: u64 = 2;
+
+static PROVIDER_FAILING: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Record the final outcome of a call to the validation-data or anisette
+/// provider (the Mac relay or a compatible service): after its retries, not
+/// per attempt. The bit of `kind` is set on failure and cleared on success.
+pub(crate) fn record_provider_result(kind: u64, ok: bool) {
+    use std::sync::atomic::Ordering;
+    if ok {
+        PROVIDER_FAILING.fetch_and(!kind, Ordering::SeqCst);
+    } else {
+        PROVIDER_FAILING.fetch_or(kind, Ordering::SeqCst);
+    }
+}
+
+/// Which provider calls are currently failing: bit 0 (value 1) is set while
+/// the most recent validation-data call failed, bit 1 (value 2) while the most
+/// recent anisette call failed. 0 means every provider call made so far
+/// succeeded at its latest try, or none was made. The bridge polls this to
+/// report a provider outage as a bridge state.
+#[uniffi::export]
+pub fn provider_outage_mask() -> u64 {
+    PROVIDER_FAILING.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 /// Number of Ford keys currently cached. Diagnostic only.
 #[uniffi::export]
 pub fn ford_key_cache_size() -> u64 {

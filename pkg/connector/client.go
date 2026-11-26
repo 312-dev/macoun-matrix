@@ -608,6 +608,10 @@ type IMClient struct {
 	// first setCloudSyncDone; decremented by onForwardBackfillDone.
 	pendingInitialBackfills int64
 
+	// providerOutage tracks whether an outage of the validation-data /
+	// anisette provider has been reported as a bridge state.
+	providerOutage providerOutageTracker
+
 	// startupHoldScoped is false while the reorder buffer holds every message
 	// during the startup CloudKit sync, and true once scopeStartupHold has
 	// narrowed the hold to the chats that still need it (macoun_startup_hold.go).
@@ -1634,6 +1638,7 @@ func (c *IMClient) Connect(ctx context.Context) {
 	c.msgBuffer = &messageBuffer{client: c}
 	go c.periodicStateSave(log)
 	go c.periodicPetRefresh(log)
+	go c.runProviderStatusLoop(log, c.stopChan)
 	go c.periodicStatusSharingReinvite(log)
 	go c.startSharedStreamsWatcher(log)
 
@@ -1694,7 +1699,9 @@ func (c *IMClient) Connect(ctx context.Context) {
 				Msg("Re-armed backfill for portals that were marked done with no bridged messages")
 		}
 	}
-	c.UserLogin.BridgeState.Send(status.BridgeState{StateEvent: status.StateConnected})
+	// Plain CONNECTED, unless a provider outage has been reported and is not
+	// over (macoun_provider_status.go).
+	c.UserLogin.BridgeState.Send(c.providerOutage.connectedState())
 
 	// Backstop the APNs receive path: if it goes fully silent (no frames, not
 	// even keepalive Pongs) for far longer than a healthy link ever would,

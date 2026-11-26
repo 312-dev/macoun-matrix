@@ -131,6 +131,18 @@ impl AnisetteProvider for BridgeAnisetteProvider {
                 e
             })?;
 
+            // Only the macoun provider is tracked for the outage bridge state;
+            // a v3 server is a different kind of dependency.
+            #[cfg(feature = "hardware-key")]
+            let tracked = matches!(source, AnisetteSource::Relay(_));
+            #[cfg(not(feature = "hardware-key"))]
+            let tracked = false;
+            let record = |ok: bool| {
+                if tracked {
+                    crate::record_provider_result(crate::PROVIDER_ANISETTE, ok);
+                }
+            };
+
             for attempt in 0..MAX_RETRIES {
                 let attempt_start = std::time::Instant::now();
                 info!(
@@ -176,6 +188,7 @@ impl AnisetteProvider for BridgeAnisetteProvider {
                             attempt_start.elapsed(),
                             call_start.elapsed()
                         );
+                        record(true);
                         return Ok(headers);
                     }
                     Ok(Ok(Err(AnisetteError::SerdeError(ref e)))) => {
@@ -197,6 +210,7 @@ impl AnisetteProvider for BridgeAnisetteProvider {
                         // Non-serde error — don't retry blindly.
                         // macoun: warn with the reason (e.g. Mac relay unreachable).
                         warn!("anisette: attempt {}/{} failed: {}", attempt + 1, MAX_RETRIES, e);
+                        record(false);
                         return Err(e);
                     }
                     Ok(Err(panic_payload)) => {
@@ -251,6 +265,7 @@ impl AnisetteProvider for BridgeAnisetteProvider {
                 MAX_RETRIES,
                 call_start.elapsed()
             );
+            record(false);
             Err(last_err.unwrap_or_else(|| {
                 AnisetteError::InvalidArgument("Anisette provisioning failed".into())
             }))

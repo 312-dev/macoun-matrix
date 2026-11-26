@@ -254,7 +254,9 @@ impl OSConfig for RelayOSConfig {
     async fn generate_validation_data(&self) -> Result<Vec<u8>, PushError> {
         // Warn here: rustpush's callers log a failed register only at debug
         // upstream, and a relay outage must show in the default log.
-        self.fetch_validation_data().await.map_err(|e| {
+        let result = self.fetch_validation_data().await;
+        crate::record_provider_result(crate::PROVIDER_VALIDATION_DATA, result.is_ok());
+        result.map_err(|e| {
             warn!("NAC relay: validation data from {} failed: {}", self.relay.url, e);
             e
         })

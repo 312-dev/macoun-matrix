@@ -1086,6 +1086,10 @@ uint64_t uniffi_rustpushgo_fn_func_ford_key_cache_size(
 	RustCallStatus* out_status
 );
 
+uint64_t uniffi_rustpushgo_fn_func_provider_outage_mask(
+	RustCallStatus* out_status
+);
+
 void uniffi_rustpushgo_fn_func_init_logger(
 	RustCallStatus* out_status
 );
