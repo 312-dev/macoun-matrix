@@ -1,0 +1,28 @@
+name: Lock old issues
+
+# Closed issues with no activity for 90 days are locked, so a new report
+# about the same symptom is opened fresh (with its own logs and version)
+# instead of a comment on a fixed bug. Open issues are never touched.
+on:
+  schedule:
+    - cron: '0 16 * * *'
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+concurrency:
+  group: lock-threads
+
+jobs:
+  lock:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: dessant/lock-threads@v6
+        with:
+          issue-inactive-days: 90
+          issue-comment: >
+            This issue has been closed for a while, so it is locked. If you see
+            the same problem on the latest release, please open a new issue
+            with your logs.
+          process-only: issues

@@ -38,6 +38,10 @@ Security problems go through [SECURITY.md](SECURITY.md), not the issue tracker.
 Nothing in the test suite talks to Apple. If your change affects what is sent
 to Apple, say in the pull request how you checked it against a real account.
 
+AI-assisted changes are welcome on the same terms as any other: you have read
+and understood every line, you have run it, and you can answer review
+questions about it yourself.
+
 ## Licensing of contributions
 
 By contributing you agree that your contribution is licensed under the licence
