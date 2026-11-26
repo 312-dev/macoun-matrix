@@ -7739,6 +7739,47 @@ func (c *IMClient) HandleMatrixPowerLevels(ctx context.Context, msg *bridgev2.Ma
 // Chat & user info
 // ============================================================================
 
+// groupChatMemberList builds the Matrix member list for a group portal from
+// its stored or cached roster. The owner is always included, because
+// CloudKit leaves the owner out of a chat's participant list.
+func (c *IMClient) groupChatMemberList(memberList []string) *bridgev2.ChatMemberList {
+	memberMap := make(map[networkid.UserID]bridgev2.ChatMember)
+	for _, member := range memberList {
+		userID := makeUserID(member)
+		if c.isMyHandle(member) {
+			memberMap[userID] = bridgev2.ChatMember{
+				EventSender: bridgev2.EventSender{
+					IsFromMe:    true,
+					SenderLogin: c.UserLogin.ID,
+					Sender:      userID,
+				},
+				Membership: event.MembershipJoin,
+			}
+		} else {
+			memberMap[userID] = bridgev2.ChatMember{
+				EventSender: bridgev2.EventSender{Sender: userID},
+				Membership:  event.MembershipJoin,
+			}
+		}
+	}
+
+	myUserID := makeUserID(c.handle)
+	if _, hasSelf := memberMap[myUserID]; !hasSelf {
+		memberMap[myUserID] = bridgev2.ChatMember{
+			EventSender: bridgev2.EventSender{
+				IsFromMe:    true,
+				SenderLogin: c.UserLogin.ID,
+				Sender:      myUserID,
+			},
+			Membership: event.MembershipJoin,
+		}
+	}
+	return &bridgev2.ChatMemberList{
+		IsFull:    true,
+		MemberMap: memberMap,
+	}
+}
+
 func (c *IMClient) GetChatInfo(ctx context.Context, portal *bridgev2.Portal) (*bridgev2.ChatInfo, error) {
 	portalID := string(portal.ID)
 	// Groups use "gid:<UUID>" portal IDs, or legacy comma-separated participant IDs
@@ -7775,49 +7816,10 @@ func (c *IMClient) GetChatInfo(ctx context.Context, portal *bridgev2.Portal) (*b
 
 		// For gid: portals, look up members from cloud_chat table;
 		// for legacy comma-separated IDs, parse from the portal ID.
-		memberList := c.resolveGroupMembers(ctx, portalID)
-
-		memberMap := make(map[networkid.UserID]bridgev2.ChatMember)
-		for _, member := range memberList {
-			userID := makeUserID(member)
-			if c.isMyHandle(member) {
-				memberMap[userID] = bridgev2.ChatMember{
-					EventSender: bridgev2.EventSender{
-						IsFromMe:    true,
-						SenderLogin: c.UserLogin.ID,
-						Sender:      userID,
-					},
-					Membership: event.MembershipJoin,
-				}
-			} else {
-				memberMap[userID] = bridgev2.ChatMember{
-					EventSender: bridgev2.EventSender{Sender: userID},
-					Membership:  event.MembershipJoin,
-				}
-			}
-		}
-
-		// CloudKit doesn't include the owner in the participant list (it's
-		// implied). Always ensure we're in the member map so Beeper knows
-		// we belong to this conversation.
-		myUserID := makeUserID(c.handle)
-		if _, hasSelf := memberMap[myUserID]; !hasSelf {
-			memberMap[myUserID] = bridgev2.ChatMember{
-				EventSender: bridgev2.EventSender{
-					IsFromMe:    true,
-					SenderLogin: c.UserLogin.ID,
-					Sender:      myUserID,
-				},
-				Membership: event.MembershipJoin,
-			}
-		}
-		chatInfo.Members = &bridgev2.ChatMemberList{
-			IsFull:    true,
-			MemberMap: memberMap,
-			// Permissive at creation (silent initial-member add), full lockdown
-			// on resync. See powerLevelsForMemberSync.
-			PowerLevels: c.powerLevelsForMemberSync(ctx, portal, true),
-		}
+		chatInfo.Members = c.groupChatMemberList(c.resolveGroupMembers(ctx, portalID))
+		// Permissive at creation (silent initial-member add), full lockdown
+		// on resync. See powerLevelsForMemberSync.
+		chatInfo.Members.PowerLevels = c.powerLevelsForMemberSync(ctx, portal, true)
 
 		// Only set the group name for NEW portals (no Matrix room yet).
 		// For existing portals, skip — the name is managed by handleRename
