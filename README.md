@@ -261,7 +261,7 @@ To abort an interactive command (a picker waiting for your reply), type `cancel`
 | `contacts` | Search your synced contacts by name (iCloud, external CardDAV, or local macOS Contacts depending on `backfill_source` and `carddav` settings) and reply with a number to open a chat. Different from `start-chat` — use this when you don't remember the number/email. Alias: `find`. |
 | `restore-chat` | List iMessage chats in the recycle bin. Reply with a number to bring one back, including its history. |
 | `new-group` | Create an iMessage group: `new-group +15551234567 someone@icloud.com name Weekend trip` (two or more people, written without spaces; the name is optional). See [Groups](#groups). |
-| `group-add`, `group-remove`, `group-leave` | Run inside a group's room: add or remove a person (`group-add +15551234567`), or leave the group. |
+| `group-add`, `group-remove`, `group-leave` | Run inside a group's room: add or remove a person (`group-add +15551234567`), or leave the group. Adding and removing also work with the room's own invite and remove. |
 | `delete-portal` | Admin only, run inside a bridged chat: delete that room and keep it deleted across restarts. Nothing is deleted on Apple's side; a new message in the chat or `restore-chat` brings it back. |
 | `logout` | Sign out of iMessage. Lists active handles, you reply with a number (or `all`). The bot then walks you through the manual step at `appleid.apple.com → Devices` to fully revoke the bridge from Apple's servers. |
 | `help` | Full command list, grouped by section. |
@@ -307,20 +307,30 @@ groups cannot: their rooms refuse these changes.
   name cannot be cleared from Matrix.
 - **Photo.** Change or remove the room avatar. The picture is cropped to a
   square and sent as the group photo.
-- **Add, remove, leave.** `group-add <phone or email>`, `group-remove <phone or
-  email>` and `group-leave` inside the group's room. iMessage only allows
-  removing someone, or leaving, while at least three people remain. The
-  room's own invite and kick stay locked, so nobody can pull a Matrix user
-  who is not on iMessage into a bridged chat.
+- **Add and remove.** Use the room's own invite and remove on a contact's
+  iMessage ghost (`@imessage_...`), or `group-add <phone or email>` and
+  `group-remove <phone or email>` inside the room. A person can only be added
+  if they are reachable over iMessage, and iMessage only allows removing
+  someone while at least three people remain. If the change cannot be made,
+  the bridge puts the room back the way the group is (withdraws the invite, or
+  brings the removed ghost back) and says why.
+- **Leave.** `group-leave` inside the room, under the same three-person rule.
+  Leaving the room itself only reaches Apple with `bridge.bridge_matrix_leave`
+  enabled.
+
+Only iMessage contacts can be in a bridged group. In these rooms you have
+power level 1, one step above the ghosts, which is what lets you invite and
+remove them and nothing else. Matrix cannot limit an invite to ghosts, so if
+anyone else is invited the bridge withdraws the invite at once and posts a
+notice. Everywhere else (direct chats, carrier groups, and older groups whose
+internal id is a list of participants) invite and remove stay locked.
 
 If a rename or photo change is refused (for example in a carrier group), the
 room keeps the new name or avatar until the next sync unless
 `bridge.revert_failed_state_changes` is `true` in `config.yaml`; with it the
 bridge puts the old one back at once.
 
-Groups whose room is older than the group id scheme (their internal id is a
-list of participants) can be renamed and given a photo, but not have members
-changed from Matrix.
+Those older groups can still be renamed and given a photo.
 
 ## FaceTime
 
