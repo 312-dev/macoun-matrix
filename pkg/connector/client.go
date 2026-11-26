@@ -7742,8 +7742,17 @@ func (c *IMClient) HandleMatrixPowerLevels(ctx context.Context, msg *bridgev2.Ma
 // groupChatMemberList builds the Matrix member list for a group portal from
 // its stored or cached roster. The owner is always included, because
 // CloudKit leaves the owner out of a chat's participant list.
+//
+// The list is marked full only when the roster names someone besides the
+// owner. bridgev2 removes every ghost missing from a full list, so a group
+// whose roster is unknown (cloud_chat holds only a participantless synthetic
+// row and no live message has filled the cache yet) would otherwise lose
+// all its ghosts at the next resync, each with the reason "User is not in
+// remote chat". With an unknown roster the room's members are left as they
+// are.
 func (c *IMClient) groupChatMemberList(memberList []string) *bridgev2.ChatMemberList {
 	memberMap := make(map[networkid.UserID]bridgev2.ChatMember)
+	others := 0
 	for _, member := range memberList {
 		userID := makeUserID(member)
 		if c.isMyHandle(member) {
@@ -7756,6 +7765,7 @@ func (c *IMClient) groupChatMemberList(memberList []string) *bridgev2.ChatMember
 				Membership: event.MembershipJoin,
 			}
 		} else {
+			others++
 			memberMap[userID] = bridgev2.ChatMember{
 				EventSender: bridgev2.EventSender{Sender: userID},
 				Membership:  event.MembershipJoin,
@@ -7775,7 +7785,7 @@ func (c *IMClient) groupChatMemberList(memberList []string) *bridgev2.ChatMember
 		}
 	}
 	return &bridgev2.ChatMemberList{
-		IsFull:    true,
+		IsFull:    others > 0,
 		MemberMap: memberMap,
 	}
 }
