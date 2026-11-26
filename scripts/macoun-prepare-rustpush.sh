@@ -25,6 +25,14 @@ if [ -n "$(git -C "$SRC" status --porcelain --ignore-submodules=none)" ]; then
   echo "error: $SRC has local changes" >&2; exit 1
 fi
 
+# Skip when the tree was already prepared from the same inputs, so cargo's
+# incremental build is not invalidated by fresh mtimes on every run.
+stamp=$( { echo "$PIN"; cat "$0"; find third_party/patches rustpush/open-absinthe -type f -print0 | sort -z | xargs -0 cat; } | sha256sum | cut -d' ' -f1)
+if [ -f "$RP/.macoun-prepared" ] && [ "$(cat "$RP/.macoun-prepared")" = "$stamp" ]; then
+  echo "rustpush already prepared at $RP ($PIN)"
+  exit 0
+fi
+
 rm -rf "$RP"
 cp -a "$SRC" "$RP"
 
@@ -99,4 +107,5 @@ rp_patch "statuskit no-saved-channel panic" "$RP/src/statuskit.rs" \
 rp_patch "statuskit channel-not-found panic" "$RP/src/statuskit.rs" \
   's/let Some\(referenced_channel\) = state\.keys\.get_mut\(&base64_encode\(&channel\.id\)\) else \{ panic!\("Channel not found!"\) \};/let Some(referenced_channel) = state.keys.get_mut(&base64_encode(&channel.id)) else { warn!("StatusKit: presence msg arrived before keysharing for channel={} - dropping", encode_hex(&channel.id)); return Ok(None); };/' \
   'presence msg arrived before keysharing'
+echo "$stamp" > "$RP/.macoun-prepared"
 echo "rustpush prepared at $RP ($PIN)"
