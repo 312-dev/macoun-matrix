@@ -2562,14 +2562,13 @@ func (c *IMClient) runCloudKitBackfill(ctx context.Context, log zerolog.Logger) 
 	var total cloudSyncCounters
 	backfillStart := time.Now()
 
-	// Always restart attachment sync from scratch. The attachment map
-	// (attMap) is built in-memory during sync and used to enrich messages.
-	// On crash/restart the map is lost, so resuming from a saved token
-	// would produce an incomplete map — messages referencing pre-crash
-	// attachments would lose their metadata. Attachment zones are small
-	// relative to messages, so the overhead is minimal.
+	// The attachment zone's row in cloud_sync_state is not a resume point:
+	// syncCloudAttachments takes its position from the attachment index, which
+	// stores the records together with the position. Clearing the row keeps a
+	// build without the index (which resumes from nothing by design) and this
+	// one agreeing on what the row means.
 	if err := c.cloudStore.clearZoneToken(ctx, cloudZoneAttachments); err != nil {
-		log.Warn().Err(err).Msg("Failed to clear attachment zone token for fresh sync")
+		log.Warn().Err(err).Msg("Failed to clear attachment zone token")
 	}
 
 	// Check which zones have saved continuation tokens (for diagnostic logging).
@@ -2578,12 +2577,13 @@ func (c *IMClient) runCloudKitBackfill(ctx context.Context, log zerolog.Logger) 
 	log.Info().
 		Bool("chat_token_saved", savedChatTok != nil).
 		Bool("msg_token_saved", savedMsgTok != nil).
-		Msg("CloudKit backfill starting (attachment zone always fresh)")
+		Msg("CloudKit backfill starting")
 
-	// Phase 0: Sync attachments first (with ALL_ASSETS) to populate the
-	// Ford key cache before any downloads happen. MMCS deduplication can
-	// serve Ford blobs encrypted with a different record's key, so the
-	// cache must be fully populated before downloads start.
+	// Phase 0: Sync attachments first to populate the Ford key cache before
+	// any downloads happen. MMCS deduplication can serve Ford blobs encrypted
+	// with a different record's key, so the cache must be fully populated
+	// (from the attachment index plus the changes since) before downloads
+	// start.
 	phase0Start := time.Now()
 	var attMap map[string]cloudAttachmentRow
 	var attToken *string
@@ -2668,151 +2668,59 @@ func (c *IMClient) runCloudKitBackfill(ctx context.Context, log zerolog.Logger) 
 	return total, nil
 }
 
-// syncCloudAttachments syncs the attachment zone and builds a GUID→attachment info map.
+// syncCloudAttachments builds the GUID→attachment info map and fills the Ford
+// key caches from the attachment zone. It works from the persisted attachment
+// index when there is one (macoun_attachment_index.go), so only changes since
+// the previous pass are fetched.
+//
+// The index is used only while the message zone has a saved position. Without
+// one the messages are about to be read from the start (first sync, cleared
+// tokens, sync-version upgrade), and the attachment zone is read from the
+// start with them, as a full re-sync intends.
 func (c *IMClient) syncCloudAttachments(ctx context.Context) (map[string]cloudAttachmentRow, *string, error) {
-	attMap := make(map[string]cloudAttachmentRow)
-	token, err := c.cloudStore.getSyncState(ctx, cloudZoneAttachments)
-	if err != nil {
-		return attMap, nil, err
-	}
-
 	log := c.Main.Bridge.Log.With().Str("component", "cloud_sync").Logger()
-	consecutiveErrors := 0
-	const maxConsecutiveAttErrors = 3
-	for page := 0; page < maxCloudSyncPages; page++ {
-		resp, syncErr := safeCloudSyncAttachments(c.client, token)
-		if syncErr != nil {
-			consecutiveErrors++
-			retryDelay := cloudKitRetryDelay(syncErr, consecutiveErrors)
-			log.Warn().Err(syncErr).
-				Int("page", page).
-				Int("imported_so_far", len(attMap)).
-				Int("consecutive_errors", consecutiveErrors).
-				Dur("retry_after", retryDelay).
-				Msg("CloudKit attachment sync page failed (FFI error)")
-			if consecutiveErrors >= maxConsecutiveAttErrors {
-				log.Error().
-					Int("page", page).
-					Int("imported_so_far", len(attMap)).
-					Msg("CloudKit attachment sync: too many consecutive FFI errors, stopping pagination")
-				break
-			}
-			time.Sleep(retryDelay)
-			continue
-		}
-		consecutiveErrors = 0
 
-		for _, att := range resp.Attachments {
-			mime := ""
-			if att.MimeType != nil {
-				mime = *att.MimeType
+	index, err := openAttachmentIndex(c.cloudStore.db, string(c.cloudStore.loginID))
+	if err != nil {
+		log.Warn().Err(err).Msg("Attachment index key unavailable; reading the whole attachment zone")
+		index = nil
+	}
+	if index != nil {
+		msgToken, tokErr := c.cloudStore.getSyncState(ctx, cloudZoneMessages)
+		if tokErr != nil || msgToken == nil {
+			if tokErr == nil {
+				tokErr = index.ensureSchema(ctx)
 			}
-			uti := ""
-			if att.UtiType != nil {
-				uti = *att.UtiType
+			if tokErr == nil {
+				tokErr = index.reset(ctx)
 			}
-			filename := ""
-			if att.Filename != nil {
-				filename = *att.Filename
+			if tokErr != nil {
+				log.Warn().Err(tokErr).Msg("Could not prepare the attachment index for a full sync; not using it in this pass")
+				index = nil
 			}
-			attMap[att.Guid] = cloudAttachmentRow{
-				GUID:       att.Guid,
-				MimeType:   mime,
-				UTIType:    uti,
-				Filename:   filename,
-				FileSize:   att.FileSize,
-				RecordName: att.RecordName,
-				HasAvid:    att.HasAvid,
-			}
-
-			// Populate the Ford key cache from this record's
-			// PCS-decrypted protection_info. Mirrors the sync-side
-			// half of the 94f7b8e Ford dedup fix — every video's
-			// Ford key is available for future cross-batch lookup,
-			// regardless of upload order. Registered on BOTH the
-			// Go cache (used by Go-side lookups and tests) AND the
-			// wrapper's process-wide cache (used by the Ford
-			// recovery path inside cloud_download_attachment when
-			// an SIV panic is caught).
-			if att.FordKey != nil {
-				if c.fordCache != nil {
-					c.fordCache.Register(*att.FordKey)
-				}
-				rustpushgo.RegisterFordKey(*att.FordKey)
-			}
-			if att.AvidFordKey != nil {
-				if c.fordCache != nil {
-					c.fordCache.Register(*att.AvidFordKey)
-				}
-				rustpushgo.RegisterFordKey(*att.AvidFordKey)
-			}
-		}
-
-		prev := ptrStringOr(token, "")
-		token = resp.ContinuationToken
-
-		// Persist token after each page for crash-safe resume.
-		if token != nil {
-			if saveErr := c.cloudStore.setSyncStateSuccess(ctx, cloudZoneAttachments, token); saveErr != nil {
-				log.Warn().Err(saveErr).Int("page", page).Msg("Failed to persist attachment sync token mid-page")
-			}
-		}
-
-		if resp.Done || (page > 0 && prev == ptrStringOr(token, "")) {
-			break
 		}
 	}
 
-	// QueryRecords fallback: query attachmentManateeZone directly for records
-	// the FetchRecordChanges feed missed. Pass all record_names already in attMap
-	// so Rust only returns genuinely new records.
-	knownNames := make([]string, 0, len(attMap))
-	for _, row := range attMap {
-		knownNames = append(knownNames, row.RecordName)
-	}
-	if fallback, fallbackErr := safeCloudQueryAttachmentsFallback(c.client, knownNames); fallbackErr != nil {
-		log.Warn().Err(fallbackErr).Msg("CloudKit attachment QueryRecords fallback failed")
-	} else {
-		for _, att := range fallback.Attachments {
-			mime := ""
-			if att.MimeType != nil {
-				mime = *att.MimeType
+	attMap, token := syncAttachmentZone(ctx, index, attachmentZoneSource{
+		fetchPage: func(token *string) (rustpushgo.WrappedCloudSyncAttachmentsPage, error) {
+			return safeCloudSyncAttachments(c.client, token)
+		},
+		fetchFallback: func(knownRecordNames []string) (rustpushgo.WrappedCloudSyncAttachmentsPage, error) {
+			return safeCloudQueryAttachmentsFallback(c.client, knownRecordNames)
+		},
+		// Registered on BOTH the Go cache (used by Go-side lookups and
+		// tests) AND the wrapper's process-wide cache (used by the Ford
+		// recovery path inside cloud_download_attachment when an SIV panic
+		// is caught), so every video's Ford key is available for
+		// cross-batch lookup regardless of upload order.
+		registerFordKey: func(key []byte) {
+			if c.fordCache != nil {
+				c.fordCache.Register(key)
 			}
-			uti := ""
-			if att.UtiType != nil {
-				uti = *att.UtiType
-			}
-			filename := ""
-			if att.Filename != nil {
-				filename = *att.Filename
-			}
-			attMap[att.Guid] = cloudAttachmentRow{
-				GUID:       att.Guid,
-				MimeType:   mime,
-				UTIType:    uti,
-				Filename:   filename,
-				FileSize:   att.FileSize,
-				RecordName: att.RecordName,
-				HasAvid:    att.HasAvid,
-			}
-			if att.FordKey != nil {
-				if c.fordCache != nil {
-					c.fordCache.Register(*att.FordKey)
-				}
-				rustpushgo.RegisterFordKey(*att.FordKey)
-			}
-			if att.AvidFordKey != nil {
-				if c.fordCache != nil {
-					c.fordCache.Register(*att.AvidFordKey)
-				}
-				rustpushgo.RegisterFordKey(*att.AvidFordKey)
-			}
-		}
-		if len(fallback.Attachments) > 0 {
-			log.Info().Int("count", len(fallback.Attachments)).Msg("CloudKit attachment QueryRecords fallback added records")
-		}
-	}
-
+			rustpushgo.RegisterFordKey(key)
+		},
+		retryDelay: cloudKitRetryDelay,
+	}, log)
 	return attMap, token, nil
 }
 
