@@ -1,0 +1,12 @@
+# macoun-matrix Linux amd64 build environment (Debian bookworm, glibc 2.36).
+# Build context: an empty directory; sources are bind-mounted at /src.
+FROM rust:1-bookworm
+ARG GO_VERSION=1.25.11
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential clang cmake perl pkg-config protobuf-compiler \
+      libolm-dev libheif-dev libunwind-dev libssl-dev git ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" | tar -C /usr/local -xz
+ENV PATH=/usr/local/go/bin:/usr/local/cargo/bin:$PATH \
+    GOTOOLCHAIN=local GOFLAGS=-buildvcs=false
+WORKDIR /src

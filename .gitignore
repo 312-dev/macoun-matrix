@@ -69,3 +69,6 @@ tools/nac-relay-app/NACRelay.app/
 !rustpush/open-absinthe/src/bin/
 _todo/
 .gocache/
+
+# macoun-matrix build output
+/macoun-matrix
