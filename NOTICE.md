@@ -46,12 +46,18 @@ compatible with this as a Larger Work, MPL section 3.3).
 
 ## Binaries
 
-This repository publishes source only. A built binary links MPL-2.0, AGPL-3.0
+The bridge is published as source only. A built bridge links MPL-2.0, AGPL-3.0
 and SSPL v1 code. Building and running it for your own account is the intended
-use. Distributing a binary, or offering it to third parties as a service,
-brings SSPL obligations that this combination with AGPL and MPL code cannot
-satisfy, so the project does not publish binaries and asks that you do not
-either.
+use. Distributing a bridge binary, or offering it to third parties as a
+service, brings SSPL obligations that this combination with AGPL and MPL code
+cannot satisfy, so the project does not publish bridge binaries and asks that
+you do not either.
+
+The Mac tools are different. `nac-relay` (`tools/macoun-relay/`) and
+`extract-key` (`tools/extract-key/`) are AGPL-3.0, have no Go dependencies and
+contain no rustpush code. Releases carry universal macOS binaries of the two
+(`macoun-mac-tools-<tag>.tar.gz`, built by `.github/workflows/mac-tools.yml`),
+with the AGPL-3.0 text and the source commit in the archive.
 
 ## corten-matrix parts that are not in its public source
 

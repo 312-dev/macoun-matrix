@@ -67,10 +67,10 @@ Mac does not interrupt messaging. Details:
 
 The full walk-through is [docs/setup.md](docs/setup.md). In short:
 
-1. **On the Mac:** build `tools/macoun-relay`, install it as a LaunchAgent
+1. **On the Mac:** download or build `nac-relay`, install it as a LaunchAgent
    bound to the Mac's private address, and note the relay token and
    certificate fingerprint.
-2. **On the Mac:** run `tools/extract-key` once to get the hardware key the
+2. **On the Mac:** run `extract-key` once to get the hardware key the
    bridge logs in with.
 3. **On Linux:** build the bridge.
 
@@ -99,7 +99,11 @@ The full walk-through is [docs/setup.md](docs/setup.md). In short:
    `MACOUN_NAC_RELAY_CERT_FP`), then log in from Matrix through the bridge bot
    with the hardware key, your Apple ID password and a 2FA code.
 
-There are no binary releases; see [Licence](#licence) for why.
+The bridge has no binary releases; see [Licence](#licence) for why. The two
+Mac tools do: each [release](https://github.com/312-dev/macoun-matrix/releases)
+carries `macoun-mac-tools-<tag>.tar.gz` with universal `nac-relay` and
+`extract-key` binaries for macOS 13 and later, so the Mac needs no Go
+toolchain.
 
 ## Configuration
 
@@ -175,9 +179,10 @@ open code and a Mac you own. Almost all of the bridge is their work; thank you.
   it in `third_party/patches/rustpush/`.
 
 [NOTICE.md](NOTICE.md) has the file-level map. Because a built binary links
-AGPL and SSPL code together, this project publishes source only: build the
-bridge for your own account, and do not redistribute binaries or run it as a
-service for other people.
+AGPL and SSPL code together, this project publishes the bridge as source only:
+build it for your own account, and do not redistribute bridge binaries or run
+it as a service for other people. The Mac tools contain no SSPL code, which is
+why their binaries can be published.
 
 ## Disclaimer
 

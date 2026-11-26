@@ -37,6 +37,25 @@ defaults read /Library/Preferences/com.apple.SoftwareUpdate
 
 ## 2. Build and run the relay on the Mac
 
+Either download the release build (macOS 13 and later, Intel or Apple
+Silicon):
+
+```bash
+mkdir -p <relay-dir>/bin <relay-dir>/logs <relay-dir>/state
+cd <relay-dir>
+T=<tag>   # for example v0.1.0
+curl -fsSLO "https://github.com/312-dev/macoun-matrix/releases/download/$T/macoun-mac-tools-$T.tar.gz"
+curl -fsSL "https://github.com/312-dev/macoun-matrix/releases/download/$T/sha256sums-mac-tools.txt" | shasum -a 256 -c
+tar -xzf "macoun-mac-tools-$T.tar.gz"
+cp "macoun-mac-tools-$T/nac-relay" bin/
+```
+
+Download with `curl` as above rather than a browser: a browser marks the file
+as quarantined and Gatekeeper refuses to run an unsigned binary. The archive
+also holds `extract-key` (step 3) and the LaunchAgent template.
+
+Or build it from source:
+
 ```bash
 git clone https://github.com/312-dev/macoun-matrix.git
 mkdir -p <relay-dir>/bin <relay-dir>/logs <relay-dir>/state
@@ -49,8 +68,10 @@ Install it as a LaunchAgent from the template. **Never run `nac-relay
 all interfaces.
 
 ```bash
+# The template is in the release archive, or at
+# tools/macoun-relay/launchd/ in a source checkout.
 sed -e 's#@RELAY_DIR@#<relay-dir>#g' -e 's#@LISTEN_IP@#<mac-ip>#g' \
-  tools/macoun-relay/launchd/dev.macoun.relay.plist.template \
+  <path-to>/dev.macoun.relay.plist.template \
   > ~/Library/LaunchAgents/dev.macoun.relay.plist
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.macoun.relay.plist
 launchctl print gui/$(id -u)/dev.macoun.relay | grep -E 'state|pid'
@@ -95,6 +116,9 @@ Only needed for a new login. The key must come from the same Mac that runs the
 relay, so the identity matches the NAC data and anisette.
 
 ```bash
+# From the release archive of step 2:
+HOME=<relay-dir>/state <relay-dir>/macoun-mac-tools-<tag>/extract-key
+# Or from source:
 cd macoun-matrix/tools/extract-key
 ./build.sh      # or: go build -o extract-key .
 HOME=<relay-dir>/state ./extract-key

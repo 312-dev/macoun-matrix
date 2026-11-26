@@ -28,8 +28,10 @@ AGPL-3.0 or SSPL v1 is included, linked, loaded at run time or required.
 Because AGPL code is linked into the binary, treat a built binary as AGPL-3.0.
 SSPL rustpush makes it unsuitable for distribution or for offering to other
 people as a service: build it for your own account and do not hand out
-binaries. The project publishes source only for the same reason. [NOTICE.md](../NOTICE.md) has the file-level map and the source
-commits.
+binaries. The project publishes the bridge as source only for the same reason.
+The two Mac tools contain no rustpush code, so releases do carry macOS
+binaries of them. [NOTICE.md](../NOTICE.md) has the file-level map and the
+source commits.
 
 ## Architecture
 

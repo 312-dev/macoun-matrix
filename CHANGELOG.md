@@ -1,5 +1,7 @@
 # Unreleased
 
+* Added universal macOS binaries of `nac-relay` and `extract-key` to releases
+  (`macoun-mac-tools-<tag>.tar.gz`). The bridge stays source only.
 * Added bubble and screen effects in both directions, through the
   `com.beeper.imessage.effect` content key. Outbound effects are sent on text
   messages only. See [docs/effects.md](docs/effects.md).

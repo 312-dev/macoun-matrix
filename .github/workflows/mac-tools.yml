@@ -1,0 +1,106 @@
+name: Mac tools
+
+# Builds universal (arm64 + x86_64) binaries of nac-relay and extract-key and
+# attaches them to a release. These two tools are AGPL-3.0 and contain no
+# rustpush code, so unlike the bridge they can be distributed as binaries
+# (see NOTICE.md). Pull requests that touch this file build without
+# publishing.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to build and attach the tools to
+        required: true
+  pull_request:
+    paths:
+      - .github/workflows/mac-tools.yml
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build universal binaries
+    runs-on: macos-15
+    env:
+      TAG: ${{ inputs.tag || github.event.release.tag_name || 'test' }}
+      # The supported macOS range starts at 13.
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+      CGO_ENABLED: "1"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: tools/macoun-relay/go.mod
+      - name: Build both architectures
+        run: |
+          set -euo pipefail
+          out="$PWD/out"; mkdir -p "$out"
+          for a in arm64:arm64 amd64:x86_64; do
+            goarch=${a%%:*}; clangarch=${a##*:}
+            export GOARCH=$goarch CGO_CFLAGS="-arch $clangarch" CGO_LDFLAGS="-arch $clangarch"
+            (cd tools/macoun-relay && go build -trimpath -o "$out/nac-relay-$goarch" ./tools/nac-relay)
+            (cd tools/extract-key && go build -trimpath -o "$out/extract-key-$goarch" .)
+          done
+      - name: Merge into universal binaries and check them
+        run: |
+          set -euo pipefail
+          cd out
+          for t in nac-relay extract-key; do
+            lipo -create -output "$t" "$t-arm64" "$t-amd64"
+            archs=$(lipo -archs "$t")
+            echo "$t: $archs"
+            [ "$archs" = "x86_64 arm64" ] || [ "$archs" = "arm64 x86_64" ]
+            for s in arm64 x86_64; do
+              lipo "$t" -thin "$s" -output "/tmp/$t-$s"
+              otool -l "/tmp/$t-$s" | grep -A3 LC_BUILD_VERSION | grep -q 'minos 13.0'
+            done
+          done
+          # Both slices start. nac-relay -h prints its flags and exits 0;
+          # the x86_64 slice runs under Rosetta on this runner.
+          ./nac-relay -h
+          arch -x86_64 ./nac-relay -h
+      - name: Package
+        run: |
+          set -euo pipefail
+          name="macoun-mac-tools-$TAG"
+          mkdir -p "pkg/$name"
+          cp out/nac-relay out/extract-key "pkg/$name/"
+          cp tools/macoun-relay/launchd/dev.macoun.relay.plist.template "pkg/$name/"
+          cp tools/macoun-relay/LICENSE "pkg/$name/LICENSE"
+          cat > "pkg/$name/SOURCE.txt" <<EOF
+          nac-relay and extract-key from macoun-matrix $TAG ($(git rev-parse HEAD)),
+          universal binaries for macOS 13 and later, licensed AGPL-3.0 (LICENSE).
+          Corresponding source: https://github.com/${{ github.repository }}/tree/$(git rev-parse HEAD)/tools
+          Install steps: docs/setup.md in that tree.
+          EOF
+          tar -C pkg -czf "$name.tar.gz" "$name"
+          shasum -a 256 "$name.tar.gz" > sha256sums-mac-tools.txt
+          cat sha256sums-mac-tools.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac-tools
+          path: |
+            macoun-mac-tools-*.tar.gz
+            sha256sums-mac-tools.txt
+
+  publish:
+    name: Attach to the release
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ inputs.tag || github.event.release.tag_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: mac-tools
+      - run: gh release upload "$TAG" macoun-mac-tools-*.tar.gz sha256sums-mac-tools.txt --clobber --repo "${{ github.repository }}"
