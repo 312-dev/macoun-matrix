@@ -1,0 +1,49 @@
+name: Bug report
+description: Something does not work the way the docs say it should
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Read any log you attach before posting it. Remove phone numbers, email
+        addresses, Apple IDs and tokens. Never post the hardware key,
+        `session.json`, `keystore.plist` or the relay token.
+        Security problems go through the Security tab, not here.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: macoun-matrix version
+      description: Output of `./macoun-matrix --version`, or the commit you built.
+    validations:
+      required: true
+  - type: input
+    id: bridge-host
+    attributes:
+      label: Bridge host
+      description: Distribution and version, homeserver and version, SQLite or Postgres.
+      placeholder: Debian 12, Synapse 1.120, SQLite
+  - type: input
+    id: mac
+    attributes:
+      label: Relay Mac
+      description: Model or CPU type, and macOS version.
+      placeholder: Intel Mac mini, macOS 15.7
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant lines from the bridge log and, for relay problems, `relay.log` and the `/health` output.
+      render: text
