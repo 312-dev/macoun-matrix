@@ -2187,6 +2187,11 @@ func (c *IMClient) runCloudSyncController(log zerolog.Logger) {
 	// createPortalsFromCloudSync so the canonical portal is the one (re-)backfilled.
 	c.consolidateCarrierGroupPortals(ctx, log)
 
+	// CloudKit data and deletions for this run are in place. Chats that have a
+	// room, are not deleted and have no CloudKit history waiting need nothing
+	// from the portal pass below, so their messages stop waiting for it.
+	c.scopeStartupHold(log)
+
 	// Create portals and queue forward backfill for all of them.
 	// Skip portals that are tombstoned or recently deleted this session.
 	portalStart := time.Now()

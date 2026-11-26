@@ -608,6 +608,11 @@ type IMClient struct {
 	// first setCloudSyncDone; decremented by onForwardBackfillDone.
 	pendingInitialBackfills int64
 
+	// startupHoldScoped is false while the reorder buffer holds every message
+	// during the startup CloudKit sync, and true once scopeStartupHold has
+	// narrowed the hold to the chats that still need it (macoun_startup_hold.go).
+	startupHoldScoped atomic.Bool
+
 	// apnsBufferFlushedAt is the unix-millisecond time when the APNs buffer
 	// was flushed after all forward backfills completed. Zero until that event.
 	// Used to enforce a grace window: stale read receipts that were queued in
@@ -647,15 +652,22 @@ const (
 type bufferedMessage struct {
 	msg       rustpushgo.WrappedMessage
 	timestamp uint64
+	// held marks a message that waits for the startup pass; the quiet-window
+	// and max-size flushes skip it. See messageBuffer.
+	held bool
 }
 
 // messageBuffer collects incoming APNs messages and dispatches them in
 // chronological (timestamp) order. While CloudKit sync is in progress
-// (!cloudSyncDone), messages accumulate without flushing — this prevents
-// APNs messages from being dispatched before CloudKit backfill completes,
-// which would cause older CloudKit messages to appear after newer APNs
-// messages in Matrix. Once cloudSyncDone fires, setCloudSyncDone triggers
-// a flush. After sync, normal quiet-window / max-size flushing resumes.
+// (!cloudSyncDone), messages the startup hold applies to accumulate without
+// flushing — this prevents APNs messages from being dispatched before
+// CloudKit backfill completes, which would cause older CloudKit messages to
+// be skipped by the backfill, and keeps content away from chats whose deleted
+// state is not known yet. Which messages that is: all of them until
+// scopeStartupHold, then only those startupHoldApplies names
+// (macoun_startup_hold.go). Once cloudSyncDone fires, setCloudSyncDone
+// triggers a flush of everything. Messages that are not held, and all messages
+// after sync, use normal quiet-window / max-size flushing.
 //
 // Only regular messages, tapbacks, and edits are buffered; time-sensitive
 // events (typing, read/delivery receipts) and control events (unsends,
@@ -666,10 +678,18 @@ type messageBuffer struct {
 	timer   *time.Timer
 	client  *IMClient
 
-	// Test seams. nil means the client's own isCloudSyncDone and
-	// dispatchBuffered.
-	syncDoneFn func() bool
-	dispatchFn func(rustpushgo.WrappedMessage)
+	// Test seams. nil means the client's own isCloudSyncDone,
+	// startupHoldApplies and dispatchBuffered.
+	syncDoneFn    func() bool
+	holdAppliesFn func(rustpushgo.WrappedMessage) bool
+	dispatchFn    func(rustpushgo.WrappedMessage)
+}
+
+func (b *messageBuffer) holdApplies(msg rustpushgo.WrappedMessage) bool {
+	if b.holdAppliesFn != nil {
+		return b.holdAppliesFn(msg)
+	}
+	return b.client.startupHoldApplies(msg)
 }
 
 func (b *messageBuffer) syncDone() bool {
@@ -688,51 +708,92 @@ func (b *messageBuffer) dispatch(msg rustpushgo.WrappedMessage) {
 }
 
 // add inserts a message into the buffer. While CloudKit sync is in progress,
-// or while initial forward backfills are pending, messages accumulate without
-// flushing. After both conditions clear, the buffer flushes on a quiet window
-// (500ms) or when the max size (50) is reached.
+// a message the startup hold applies to accumulates without flushing; it is
+// released by flush (setCloudSyncDone, onForwardBackfillDone) or releaseUnheld.
+// Any other message flushes on a quiet window (500ms) or when the max size
+// (50) of releasable messages is reached.
 func (b *messageBuffer) add(msg rustpushgo.WrappedMessage) {
+	// The hold check reads the database, so it runs before the lock is taken
+	// and only while it can matter.
+	holdApplies := !b.syncDone() && b.holdApplies(msg)
+
 	b.mu.Lock()
+	// syncDone is read again under the lock: flush() also takes it, so a
+	// message is either marked held before the final flush runs (and that
+	// flush dispatches it) or sees the sync as done and is not held.
+	held := holdApplies && !b.syncDone()
 	b.entries = append(b.entries, bufferedMessage{
 		msg:       msg,
 		timestamp: msg.TimestampMs,
+		held:      held,
 	})
-
-	// Hold only while CloudKit data is being downloaded (!isCloudSyncDone).
-	// Once the data download is done, messages flow immediately so real-time
-	// messages are never silently swallowed. The initial buffer is flushed
-	// by setCloudSyncDone / onForwardBackfillDone with ordering preserved.
-	if !b.syncDone() {
+	if held {
 		b.mu.Unlock()
 		return
 	}
-
-	if len(b.entries) >= messageBufferMaxSize {
-		if b.timer != nil {
-			b.timer.Stop()
-			b.timer = nil
-		}
-		b.mu.Unlock()
-		go b.flush() // background, consistent with the time.AfterFunc quiet-window path
-		return
-	}
-
-	if b.timer != nil {
-		b.timer.Stop()
-	}
-	b.timer = time.AfterFunc(messageBufferQuietWindow, b.flush)
+	b.scheduleLocked()
 	b.mu.Unlock()
 }
 
-// flush sorts all buffered messages by timestamp and dispatches them.
+// scheduleLocked arranges the next flush of releasable messages: at once when
+// messageBufferMaxSize of them are waiting, otherwise after the quiet window.
+// b.mu must be held.
+func (b *messageBuffer) scheduleLocked() {
+	releasable := 0
+	for _, e := range b.entries {
+		if !e.held {
+			releasable++
+		}
+	}
+	if releasable == 0 {
+		return
+	}
+	if b.timer != nil {
+		b.timer.Stop()
+		b.timer = nil
+	}
+	if releasable >= messageBufferMaxSize {
+		go b.flushReleasable() // background, consistent with the time.AfterFunc quiet-window path
+		return
+	}
+	b.timer = time.AfterFunc(messageBufferQuietWindow, b.flushReleasable)
+}
+
+// flush sorts all buffered messages by timestamp and dispatches them, held or
+// not. It is the release of the startup hold.
 func (b *messageBuffer) flush() {
+	b.flushEntries(true)
+}
+
+// flushReleasable dispatches the buffered messages that are not held, sorted
+// by timestamp, and leaves held ones in the buffer. Once CloudKit sync is done
+// nothing is held any more and it dispatches everything.
+func (b *messageBuffer) flushReleasable() {
+	b.flushEntries(false)
+}
+
+func (b *messageBuffer) flushEntries(includeHeld bool) {
 	b.mu.Lock()
 	if len(b.entries) == 0 {
 		b.mu.Unlock()
 		return
 	}
-	entries := b.entries
-	b.entries = nil
+	if !includeHeld && b.syncDone() {
+		includeHeld = true
+	}
+	var entries, kept []bufferedMessage
+	if includeHeld {
+		entries = b.entries
+	} else {
+		for _, e := range b.entries {
+			if e.held {
+				kept = append(kept, e)
+			} else {
+				entries = append(entries, e)
+			}
+		}
+	}
+	b.entries = kept
 	if b.timer != nil {
 		b.timer.Stop()
 		b.timer = nil
@@ -746,6 +807,51 @@ func (b *messageBuffer) flush() {
 	for _, e := range entries {
 		b.dispatch(e.msg)
 	}
+}
+
+// releaseUnheld re-checks every held message against the startup hold and
+// dispatches those it no longer applies to. It returns how many were released
+// and how many remain held.
+func (b *messageBuffer) releaseUnheld() (released, stillHeld int) {
+	type entryKey struct {
+		uuid string
+		ts   uint64
+	}
+	b.mu.Lock()
+	var candidates []rustpushgo.WrappedMessage
+	for _, e := range b.entries {
+		if e.held {
+			candidates = append(candidates, e.msg)
+		}
+	}
+	b.mu.Unlock()
+
+	// Database lookups happen outside the lock so APNs delivery is not blocked.
+	release := make(map[entryKey]bool)
+	for _, msg := range candidates {
+		if !b.holdApplies(msg) {
+			release[entryKey{msg.Uuid, msg.TimestampMs}] = true
+		}
+	}
+
+	b.mu.Lock()
+	for i := range b.entries {
+		e := &b.entries[i]
+		if !e.held {
+			continue
+		}
+		if release[entryKey{e.msg.Uuid, e.timestamp}] {
+			e.held = false
+			released++
+		} else {
+			stillHeld++
+		}
+	}
+	b.mu.Unlock()
+	if released > 0 {
+		b.flushReleasable()
+	}
+	return released, stillHeld
 }
 
 // stop cancels the flush timer and discards pending messages.

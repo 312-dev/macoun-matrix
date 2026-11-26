@@ -4015,6 +4015,24 @@ func (s *cloudBackfillStore) reconcileStrandedBackfills(ctx context.Context) (in
 	return repaired, nil
 }
 
+// newestLiveCloudMessageTS returns the timestamp (ms) of the newest live
+// CloudKit message stored for a portal, or 0 when there is none. It counts the
+// same rows listPortalIDsWithNewestTimestamp does for its NewestTS (not
+// deleted, and a real CloudKit record rather than a UUID stub written for a
+// live APNs message), because that value becomes the LatestMessageTS of the
+// ChatResync that decides whether forward backfill runs.
+func (s *cloudBackfillStore) newestLiveCloudMessageTS(ctx context.Context, portalID string) (int64, error) {
+	var newest sql.NullInt64
+	err := s.db.QueryRow(ctx, `
+		SELECT MAX(timestamp_ms) FROM cloud_message
+		WHERE login_id=$1 AND portal_id=$2 AND deleted=FALSE AND record_name <> ''
+	`, s.loginID, portalID).Scan(&newest)
+	if err != nil {
+		return 0, err
+	}
+	return newest.Int64, nil
+}
+
 func (s *cloudBackfillStore) portalsFullyBackfilledNoNewContent(ctx context.Context) (map[string]bool, error) {
 	messageTable := "cloud_message cm"
 	if s.db.Dialect == dbutil.SQLite {
