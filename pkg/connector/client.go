@@ -1607,8 +1607,13 @@ func (c *IMClient) Connect(ctx context.Context) {
 			log.Warn().Msg("Local macOS contacts unavailable — contact names will not be resolved")
 		}
 	} else {
-		cloudContacts := newCloudContactsClient(c.client, log)
-		if cloudContacts != nil {
+		var cloudContacts *cloudContactsClient
+		if !c.Main.Config.DisableICloudContacts {
+			cloudContacts = newCloudContactsClient(c.client, log)
+		}
+		if c.Main.Config.DisableICloudContacts {
+			log.Info().Msg("iCloud contacts disabled before CardDAV setup")
+		} else if cloudContacts != nil {
 			c.contacts = cloudContacts
 			log.Info().Str("url_host", logSafeURL(cloudContacts.baseURL)).Msg("Cloud contacts available (iCloud CardDAV)")
 			if syncErr := cloudContacts.SyncContacts(log); syncErr != nil {
