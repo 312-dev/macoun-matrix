@@ -12,7 +12,8 @@
 // chat delete received over APNs does (handleChatDelete): the chat joins
 // recentlyDeletedPortals and its cloud_chat and cloud_message rows are
 // soft-deleted, which is what the portal pass and the echo suppression read.
-// It does not delete anything on Apple's side.
+// It does not delete anything on Apple's side. delete-all-portals gets the
+// same treatment for every portal.
 //
 // One difference from an Apple delete: Apple's recycle bin does not know about
 // this deletion, so the deleted-chat seed could take the chat for one the user
@@ -31,6 +32,7 @@ import (
 	"time"
 
 	"maunium.net/go/mautrix/bridgev2/commands"
+	"maunium.net/go/mautrix/bridgev2/networkid"
 )
 
 func localDeleteTask(portalID string) string {
@@ -121,4 +123,66 @@ func fnDeletePortal(ce *commands.Event) {
 		}
 	}
 	commands.CommandDeletePortal.Func(ce)
+}
+
+// cmdDeleteAllPortals replaces bridgev2's delete-all-portals the same way:
+// every portal's deletion is recorded before the built-in deletes the rooms.
+var cmdDeleteAllPortals = &commands.FullHandler{
+	Name: commands.CommandDeleteAllPortals.Name,
+	Func: fnDeleteAllPortals,
+	Help: commands.HelpMeta{
+		Section:     commands.HelpSectionAdmin,
+		Description: "Delete all portals the bridge knows about and keep them deleted across restarts. Nothing is deleted on Apple's side.",
+	},
+	RequiresAdmin: true,
+}
+
+// portalDeletionRecorder is what recordPortalDeletions needs from a login's
+// client; *IMClient implements it.
+type portalDeletionRecorder interface {
+	recordPortalDeletedLocally(ctx context.Context, portalID string) error
+}
+
+// recordPortalDeletions records the deletion of each portal with the recorder
+// of its login. recorderFor returns nil for a portal whose login is not loaded
+// or is not an iMessage login; such portals are skipped. It stops at the first
+// failure and reports how many deletions were recorded.
+func recordPortalDeletions(ctx context.Context, portals []networkid.PortalKey, recorderFor func(networkid.UserLoginID) portalDeletionRecorder) (recorded int, err error) {
+	for _, key := range portals {
+		recorder := recorderFor(key.Receiver)
+		if recorder == nil {
+			continue
+		}
+		if err = recorder.recordPortalDeletedLocally(ctx, string(key.ID)); err != nil {
+			return recorded, fmt.Errorf("portal %s: %w", key.ID, err)
+		}
+		recorded++
+	}
+	return recorded, nil
+}
+
+func fnDeleteAllPortals(ce *commands.Event) {
+	portals, err := ce.Bridge.GetAllPortals(ce.Ctx)
+	if err != nil {
+		ce.Reply("Failed to get portals: %v", err)
+		return
+	}
+	keys := make([]networkid.PortalKey, 0, len(portals))
+	for _, portal := range portals {
+		keys = append(keys, portal.PortalKey)
+	}
+	_, err = recordPortalDeletions(ce.Ctx, keys, func(loginID networkid.UserLoginID) portalDeletionRecorder {
+		if login := ce.Bridge.GetCachedUserLoginByID(loginID); login != nil {
+			if client, ok := login.Client.(*IMClient); ok && client != nil {
+				return client
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		// Fail closed: rooms deleted without a recorded deletion come back.
+		ce.Reply("Failed to record the deletions, so no room was deleted: %v", err)
+		return
+	}
+	commands.CommandDeleteAllPortals.Func(ce)
 }
