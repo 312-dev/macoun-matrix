@@ -25,7 +25,8 @@ export CGO_LDFLAGS="${CGO_LDFLAGS:-} -lz"
 
 if [ "$MODE" = test ]; then
   (cd pkg/rustpushgo && cargo test --release --locked $FEATURES --lib nac_relay)
-  go test ./pkg/connector/ -run 'TestOutbound' -count=1 -v
+  (cd pkg/rustpushgo && cargo test --release --locked -p rustpush --lib macoun_rereg)
+  go test ./pkg/connector/ -run 'TestOutbound|TestMacoun' -count=1 -v
   exit 0
 fi
 

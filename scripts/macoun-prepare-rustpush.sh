@@ -107,5 +107,11 @@ rp_patch "statuskit no-saved-channel panic" "$RP/src/statuskit.rs" \
 rp_patch "statuskit channel-not-found panic" "$RP/src/statuskit.rs" \
   's/let Some\(referenced_channel\) = state\.keys\.get_mut\(&base64_encode\(&channel\.id\)\) else \{ panic!\("Channel not found!"\) \};/let Some(referenced_channel) = state.keys.get_mut(&base64_encode(&channel.id)) else { warn!("StatusKit: presence msg arrived before keysharing for channel={} - dropping", encode_hex(&channel.id)); return Ok(None); };/' \
   'presence msg arrived before keysharing'
+# macoun: reregister IDS 7 days before certificate expiry instead of 5 minutes,
+# cap the Identity retry backoff at 30 minutes instead of a day, and log
+# register failures at warn. Lets the bridge ride out a Mac relay outage.
+rp_apply "macoun IDS rereg lead, backoff cap, warn" "$RP" \
+  third_party/patches/rustpush/macoun-ids-rereg-and-backoff.patch \
+  src/ids/user.rs '^pub fn macoun_rereg_in_s\('
 echo "$stamp" > "$RP/.macoun-prepared"
 echo "rustpush prepared at $RP ($PIN)"

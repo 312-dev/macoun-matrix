@@ -1,0 +1,88 @@
+diff --git a/src/ids/identity_manager.rs b/src/ids/identity_manager.rs
+index 02392e1..3375d92 100644
+--- a/src/ids/identity_manager.rs
++++ b/src/ids/identity_manager.rs
+@@ -368,7 +368,8 @@ impl Resource for IdentityResource {
+ 
+         debug!("User locked!");
+         if let Err(err) = register(self.config.as_ref(), &*self.aps.state.read().await, &self.services, &mut *users_lock, &self.identity).await {
+-            debug!("Register failed {}!", err);
++            // macoun: warn, so a failed register (e.g. Mac relay unreachable) shows in default logs
++            warn!("IDS register failed (will retry): {}", err);
+             drop(users_lock);
+ 
+             let needs_relog = matches!(err, PushError::AuthInvalid(IDSError(6005)) | PushError::RegisterFailed(IDSError(6005)));
+@@ -436,7 +437,9 @@ impl IdentityResource {
+             "Identity",
+             resource,
+             ExponentialBuilder::default()
+-                .with_max_delay(Duration::from_secs(86400 /* one day */))
++                // macoun: cap at 30 minutes (upstream: one day), so registration
++                // resumes soon after the Mac relay comes back
++                .with_max_delay(Duration::from_secs(1800))
+                 .with_max_times(usize::MAX)
+                 .with_min_delay(Duration::from_secs(300 /* 5 mins */)),
+             Duration::from_secs(300),
+diff --git a/src/ids/user.rs b/src/ids/user.rs
+index 817a504..f45dbf9 100644
+--- a/src/ids/user.rs
++++ b/src/ids/user.rs
+@@ -92,12 +92,56 @@ impl IDSRegistration {
+             let now = duration_since_epoch().as_secs() as i64;
+             (self.registered_at_s + heartbeat_interval) as i64 - now
+         } else {
+-            // reregister 5 minutes before exp
+-            self.get_exp()? - 300
++            // macoun: reregister days before expiry, not 5 minutes; see macoun_rereg_in_s
++            let now = duration_since_epoch().as_secs() as i64;
++            macoun_rereg_in_s(self.get_exp()?, now - self.registered_at_s as i64)
+         })
+     }
+ }
+ 
++/// macoun: seconds until the next IDS reregistration when Apple sent no
++/// heartbeat interval. Upstream reregisters 300 s before the ID certificate
++/// expires; in macoun-matrix that registration needs validation data from the
++/// Mac relay, so a relay outage at that moment would stop the bridge within
++/// minutes. Reregistering MACOUN_REREG_LEAD_S (7 days) early leaves days of
++/// retries (the Identity resource retries on failure). A registration less than
++/// MACOUN_REREG_MIN_AGE_S old is not repeated, so a certificate that comes back
++/// with under 7 days left cannot cause a reregister loop. Never later than
++/// upstream's 300 s before expiry.
++pub const MACOUN_REREG_LEAD_S: i64 = 7 * 86400;
++pub const MACOUN_REREG_MIN_AGE_S: i64 = 86400;
++
++pub fn macoun_rereg_in_s(expires_in_s: i64, registered_ago_s: i64) -> i64 {
++    let early = expires_in_s - MACOUN_REREG_LEAD_S;
++    let not_before = MACOUN_REREG_MIN_AGE_S - registered_ago_s;
++    early.max(not_before).min(expires_in_s - 300)
++}
++
++#[cfg(test)]
++mod macoun_rereg_tests {
++    use super::*;
++
++    #[test]
++    fn rereg_seven_days_before_expiry() {
++        // 45-day certificate, registered just now: rereg after 38 days.
++        assert_eq!(macoun_rereg_in_s(45 * 86400, 0), 38 * 86400);
++        // Under 7 days left on an old registration: rereg now.
++        assert!(macoun_rereg_in_s(3 * 86400, 40 * 86400) <= 0);
++    }
++
++    #[test]
++    fn fresh_registration_is_not_repeated() {
++        // A new certificate with only 5 days left waits out the minimum age.
++        assert_eq!(macoun_rereg_in_s(5 * 86400, 60), 86400 - 60);
++    }
++
++    #[test]
++    fn never_later_than_upstream() {
++        // Expires in an hour, registered 10 minutes ago: upstream's -300 wins.
++        assert_eq!(macoun_rereg_in_s(3600, 600), 3300);
++    }
++}
++
+ 
+ #[derive(Debug, Clone)]
+ pub struct IDSPublicIdentity {

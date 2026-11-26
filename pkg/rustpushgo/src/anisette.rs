@@ -193,6 +193,8 @@ impl AnisetteProvider for BridgeAnisetteProvider {
                     }
                     Ok(Ok(Err(e))) => {
                         // Non-serde error — don't retry blindly.
+                        // macoun: warn with the reason (e.g. Mac relay unreachable).
+                        warn!("anisette: attempt {}/{} failed: {}", attempt + 1, MAX_RETRIES, e);
                         return Err(e);
                     }
                     Ok(Err(panic_payload)) => {

@@ -1414,7 +1414,7 @@ func (c *IMClient) Connect(ctx context.Context) {
 						return
 					}
 					if err := c.safeRefreshPetTokenThrottled(); err != nil {
-						log.Debug().Err(err).Msg("StatusKit startup share: PET refresh skipped")
+						macounPetRefreshEvent(log, err).Err(err).Msg("StatusKit startup share: PET refresh skipped") // macoun: warn unless throttled
 					}
 					shareErr := sk.ShareStatus(true, nil)
 					if shareErr != nil && strings.Contains(shareErr.Error(), "Auth Missing") &&
@@ -10461,7 +10461,7 @@ func (c *IMClient) safeRefreshPetTokenThrottled() error {
 	if raw := c.Main.Bridge.DB.KV.Get(ctx, petRefreshKVKey); raw != "" {
 		if ts, parseErr := strconv.ParseInt(raw, 10, 64); parseErr == nil {
 			if elapsed := now.Sub(time.Unix(ts, 0)); elapsed < petRefreshMinInterval {
-				return fmt.Errorf("PET refresh throttled: last refresh %s ago (min %s)",
+				return fmt.Errorf("%w: last refresh %s ago (min %s)", errPetRefreshThrottled,
 					elapsed.Round(time.Second), petRefreshMinInterval)
 			}
 		}

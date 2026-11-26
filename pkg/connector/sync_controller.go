@@ -1451,7 +1451,7 @@ func (c *IMClient) publishStatusKitAvailableAfterInvite(log zerolog.Logger, reas
 	}
 
 	if err := c.safeRefreshPetTokenThrottled(); err != nil {
-		log.Debug().Err(err).Str("reason", reason).Msg("StatusKit post-invite share_status: PET refresh skipped")
+		macounPetRefreshEvent(log, err).Err(err).Str("reason", reason).Msg("StatusKit post-invite share_status: PET refresh skipped") // macoun: warn unless throttled
 	}
 	sk, err := c.client.GetStatuskitClient()
 	if err != nil || sk == nil {
@@ -2085,6 +2085,8 @@ func (c *IMClient) runCloudSyncController(log zerolog.Logger) {
 	// and recentlyDeletedPortals has no tombstone entries.
 	// Messages for EXISTING portals are still delivered during this time
 	// (handleMessage only checks cloudSyncDone for NEW portal creation).
+	// macoun: exception for installs that have synced before, which open the
+	// gate after macounBootstrapFailOpenAfter failures; see macoun_bootstrap.go.
 	c.cloudSyncRunningLock.Lock()
 	c.cloudSyncRunning = true
 	c.cloudSyncRunningLock.Unlock()
@@ -2095,12 +2097,21 @@ func (c *IMClient) runCloudSyncController(log zerolog.Logger) {
 		c.cloudSyncRunning = false
 		c.cloudSyncRunningLock.Unlock()
 	}()
+	bootstrapFailures := 0
 	for {
 		_, err := c.runCloudSyncOnceSerialized(ctx, log, true)
 		if err != nil {
+			bootstrapFailures++
+			// macoun: fail open on an existing install (see macounShouldFailOpen).
+			if !c.isCloudSyncDone() && c.macounShouldFailOpen(ctx, log, bootstrapFailures) {
+				log.Warn().Err(err).Int("failures", bootstrapFailures).
+					Msg("macoun: CloudKit bootstrap still failing; opening the APNs gate so messages flow, bootstrap keeps retrying")
+				c.setCloudSyncDone()
+			}
 			log.Error().Err(err).
 				Dur("retry_in", cloudSyncRetryInterval).
-				Msg("CloudKit sync failed, will retry (APNs gate stays closed)")
+				Bool("gate_open", c.isCloudSyncDone()).
+				Msg("CloudKit sync failed, will retry")
 			select {
 			case <-time.After(cloudSyncRetryInterval):
 				continue

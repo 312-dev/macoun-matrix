@@ -194,15 +194,8 @@ impl RelayOSConfig {
         set_active(&relay);
         Self { inner, relay }
     }
-}
 
-#[async_trait::async_trait]
-impl OSConfig for RelayOSConfig {
-    fn build_activation_info(&self, csr: Vec<u8>) -> rustpush::activation::ActivationInfo {
-        self.inner.build_activation_info(csr)
-    }
-    fn get_activation_device(&self) -> String { self.inner.get_activation_device() }
-    async fn generate_validation_data(&self) -> Result<Vec<u8>, PushError> {
+    async fn fetch_validation_data(&self) -> Result<Vec<u8>, PushError> {
         use base64::{engine::general_purpose::STANDARD, Engine};
 
         // The relay uses a self-signed certificate, so chain validation is
@@ -228,6 +221,22 @@ impl OSConfig for RelayOSConfig {
             .map_err(|e| PushError::RelayError(0, format!("NAC relay base64 decode: {e}")))?;
         info!("NAC relay: got {} bytes of validation data from {}", data.len(), self.relay.url);
         Ok(data)
+    }
+}
+
+#[async_trait::async_trait]
+impl OSConfig for RelayOSConfig {
+    fn build_activation_info(&self, csr: Vec<u8>) -> rustpush::activation::ActivationInfo {
+        self.inner.build_activation_info(csr)
+    }
+    fn get_activation_device(&self) -> String { self.inner.get_activation_device() }
+    async fn generate_validation_data(&self) -> Result<Vec<u8>, PushError> {
+        // Warn here: rustpush's callers log a failed register only at debug
+        // upstream, and a relay outage must show in the default log.
+        self.fetch_validation_data().await.map_err(|e| {
+            warn!("NAC relay: validation data from {} failed: {}", self.relay.url, e);
+            e
+        })
     }
     fn get_protocol_version(&self) -> u32 { self.inner.get_protocol_version() }
     fn get_register_meta(&self) -> rustpush::RegisterMeta { self.inner.get_register_meta() }
