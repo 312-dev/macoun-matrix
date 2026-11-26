@@ -19,6 +19,9 @@ scripts/macoun-prepare-rustpush.sh /rustpush
 
 (cd pkg/rustpushgo && cargo build --release --locked $FEATURES)
 cp pkg/rustpushgo/target/release/librustpushgo.a .
+# flate2 in librustpushgo uses the system zlib; the generated bindings' linux
+# LDFLAGS do not name it.
+export CGO_LDFLAGS="${CGO_LDFLAGS:-} -lz"
 
 if [ "$MODE" = test ]; then
   (cd pkg/rustpushgo && cargo test --release --locked $FEATURES --lib nac_relay)
