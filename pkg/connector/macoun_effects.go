@@ -4,8 +4,10 @@
 package connector
 
 import (
+	"context"
 	"fmt"
 
+	"github.com/rs/zerolog"
 	"maunium.net/go/mautrix/bridgev2"
 	"maunium.net/go/mautrix/event"
 )
@@ -87,4 +89,32 @@ func applyIMessageEffect(cm *bridgev2.ConvertedMessage, effect *string) {
 		content.EnsureHasHTML()
 		content.FormattedBody = fmt.Sprintf("<span data-mx-spoiler>%s</span>", content.FormattedBody)
 	}
+}
+
+// outboundTextWithEffect returns the text to hand to rustpush for the first
+// part of an outbound Matrix message: the text itself, behind the effect
+// envelope when the message's content asks for a known effect. An unknown id
+// is logged and dropped, and so is any effect on a message bound for the
+// text-message relay, which carries no effects.
+func outboundTextWithEffect(ctx context.Context, raw map[string]any, isSms bool, text string) string {
+	value, ok := raw[imessageEffectKey]
+	if !ok {
+		return text
+	}
+	effect, _ := value.(string)
+	if effect == "" {
+		return text
+	}
+	log := zerolog.Ctx(ctx)
+	if !knownIMessageEffect(effect) {
+		log.Warn().Str("effect_id", effect).Msg("Dropping unknown iMessage effect from outbound message")
+		return text
+	}
+	if isSms {
+		log.Debug().Str("effect_id", effect).Msg("Dropping iMessage effect from a message to the text-message relay")
+		return text
+	}
+	// The envelope ends at the first NUL; knownIMessageEffect already rules
+	// out any id that holds one.
+	return "\x00FX\x01" + effect + "\x00" + text
 }

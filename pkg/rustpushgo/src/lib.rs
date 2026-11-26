@@ -296,6 +296,24 @@ fn is_ford_encrypted_asset(
 // all via the same code path, so recovery is a superset of rustpush's
 // capabilities.
 
+/// Splits the effect envelope that the Go connector puts ahead of outbound
+/// text (pkg/connector/macoun_effects.go, outboundTextWithEffect):
+/// `\x00FX\x01<effect id>\x00<text>`. Returns the effect id and the text
+/// after the envelope, or no effect and the text unchanged when there is no
+/// well-formed envelope. The id is the iMessage expressiveSendStyleId; the Go
+/// side only sends ids from its allowlist.
+pub(crate) fn split_effect_envelope(text: String) -> (Option<String>, String) {
+    if let Some(rest) = text.strip_prefix("\x00FX\x01") {
+        if let Some(end) = rest.find('\x00') {
+            let effect = &rest[..end];
+            if !effect.is_empty() {
+                return (Some(effect.to_string()), rest[end + 1..].to_string());
+            }
+        }
+    }
+    (None, text)
+}
+
 mod manual_ford {
     use super::*;
     use aes_siv::{siv::CmacSiv, KeyInit};
@@ -9573,6 +9591,11 @@ impl Client {
             MessageType::IMessage
         };
 
+        // Effect envelope first (see split_effect_envelope), then the rich link.
+        // iMessage effects do not exist over SMS, so an SMS send drops it.
+        let (effect, text) = split_effect_envelope(text);
+        let effect = if conversation.is_sms { None } else { effect };
+
         // Parse rich link encoded as prefix: \x00RL\x01original_url\x01url\x01title\x01summary\x00actual_text
         let (actual_text, link_meta) = if text.starts_with("\x00RL\x01") {
             let rest = &text[4..]; // skip "\x00RL\x01"
@@ -9642,7 +9665,7 @@ impl Client {
         let normal = if let Some(parts) = parts {
             NormalMessage {
                 parts,
-                effect: None,
+                effect: effect.clone(),
                 reply_guid: reply_guid.clone(),
                 reply_part: reply_part.clone(),
                 service: service.clone(),
@@ -9655,6 +9678,7 @@ impl Client {
             }
         } else {
             let mut n = NormalMessage::new(actual_text.clone(), service.clone());
+            n.effect = effect.clone();
             n.link_meta = link_meta;
             n.reply_guid = reply_guid.clone();
             n.reply_part = reply_part.clone();
