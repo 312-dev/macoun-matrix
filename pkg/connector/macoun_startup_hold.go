@@ -22,8 +22,7 @@
 //     pass, with its history first; on a first login that is every chat.
 //
 // None of these applies to a chat that already has its room, is not deleted,
-// and for which this run's CloudKit sync brought no history newer than what
-// the room already shows. Once the sync and the deleted-chat seed are done
+// and has no CloudKit history waiting to be backfilled into the room. Once the sync and the deleted-chat seed are done
 // (scopeStartupHold), messages for such chats leave the buffer through its
 // normal quiet window. Everything else stays held exactly as before, until
 // setCloudSyncDone or onForwardBackfillDone flush the buffer.
@@ -36,6 +35,7 @@ package connector
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -56,12 +56,12 @@ type startupHoldFacts struct {
 	Deleted bool
 	// LookupFailed: one of the lookups errored; the facts are not reliable.
 	LookupFailed bool
-	// NewestCloud is the timestamp of the newest live CloudKit message stored
-	// for the chat, zero when there is none.
-	NewestCloud time.Time
-	// HasBridged and NewestBridged describe the newest message in the room.
-	HasBridged    bool
-	NewestBridged time.Time
+	// BackfillWouldRun: bridgev2 would run a forward backfill when it handles
+	// the ChatResync the portal pass queues for this chat.
+	BackfillWouldRun bool
+	// BackfillHasContent: that backfill would find something to deliver that
+	// this run must not lose; see pendingForwardBackfillContent.
+	BackfillHasContent bool
 }
 
 // startupHoldDecision reports whether a message must stay in the reorder
@@ -69,10 +69,10 @@ type startupHoldFacts struct {
 // run's CloudKit sync and deleted-chat seed have completed; before that
 // nothing is known and everything is held.
 //
-// The forward-backfill test is the one bridgev2 applies when it handles the
-// ChatResync the portal pass queues (simplevent.ChatResync.CheckNeedsBackfill):
-// a backfill runs when CloudKit's newest message is later than the newest
-// message in the room, or when the room has no message at all.
+// A pending forward backfill holds the chat only when it has content: many
+// chats re-run an empty forward backfill on every start because the newest
+// CloudKit row is a tapback, which is never stored as a room message and so
+// always looks newer than the room.
 func startupHoldDecision(scoped bool, f startupHoldFacts) (hold bool, reason string) {
 	switch {
 	case !scoped:
@@ -85,12 +85,24 @@ func startupHoldDecision(scoped bool, f startupHoldFacts) (hold bool, reason str
 		return true, "chat is deleted"
 	case !f.HasRoom:
 		return true, "chat has no room yet"
-	case f.NewestCloud.IsZero():
-		return false, ""
-	case !f.HasBridged || f.NewestCloud.After(f.NewestBridged):
+	case f.BackfillWouldRun && f.BackfillHasContent:
 		return true, "forward backfill pending"
 	}
 	return false, ""
+}
+
+// forwardBackfillWouldRun mirrors simplevent.ChatResync.CheckNeedsBackfill for
+// the ChatResync createPortalsFromCloudSync queues: LatestMessageTS is the
+// newest live CloudKit message of the chat, and a backfill runs when that is
+// later than the newest message in the room, or when the room has no message.
+func forwardBackfillWouldRun(newestCloudMS int64, hasBridged bool, newestBridged time.Time) bool {
+	if newestCloudMS <= 0 {
+		return false
+	}
+	if !hasBridged {
+		return true
+	}
+	return time.UnixMilli(newestCloudMS).After(newestBridged)
 }
 
 // bufferedMessagePortalKey resolves the chat of a buffered message the way its
@@ -158,17 +170,30 @@ func (c *IMClient) startupHoldFactsFor(ctx context.Context, portalKey networkid.
 	if newestCloudMS <= 0 {
 		return facts
 	}
-	facts.NewestCloud = time.UnixMilli(newestCloudMS)
 
-	// Same lookup bridgev2 makes before CheckNeedsBackfill.
+	// Same lookup bridgev2 makes before CheckNeedsBackfill; the message it
+	// returns is also the anchor FetchMessages pages forward from.
 	last, err := c.Main.Bridge.DB.Message.GetLastPartAtOrBeforeTime(ctx, portalKey, time.Now().Add(10*time.Second))
 	if err != nil {
 		facts.LookupFailed = true
 		return facts
 	}
+	var anchorTS int64
+	var anchorGUID string
+	var newestBridged time.Time
 	if last != nil {
-		facts.HasBridged = true
-		facts.NewestBridged = last.Timestamp
+		newestBridged = last.Timestamp
+		anchorTS = last.Timestamp.UnixMilli()
+		anchorGUID = string(last.ID)
+	}
+	facts.BackfillWouldRun = forwardBackfillWouldRun(newestCloudMS, last != nil, newestBridged)
+	if !facts.BackfillWouldRun {
+		return facts
+	}
+	facts.BackfillHasContent, err = c.cloudStore.pendingForwardBackfillContent(
+		ctx, portalID, last != nil, anchorTS, anchorGUID, atomic.LoadInt64(&c.bootstrapSyncStartMS))
+	if err != nil {
+		facts.LookupFailed = true
 	}
 	return facts
 }

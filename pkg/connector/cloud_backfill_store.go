@@ -4033,6 +4033,82 @@ func (s *cloudBackfillStore) newestLiveCloudMessageTS(ctx context.Context, porta
 	return newest.Int64, nil
 }
 
+// rehydrateEmptyTask names the cloud_maintenance row that records a CloudKit
+// rehydrate of a portal which recovered nothing.
+func rehydrateEmptyTask(portalID string) string {
+	return "macoun_rehydrate_empty:" + portalID
+}
+
+// noteRehydrateFoundNothing records that a CloudKit rehydrate of the portal's
+// scrubbed rows just finished without producing a deliverable message.
+func (s *cloudBackfillStore) noteRehydrateFoundNothing(ctx context.Context, portalID string) error {
+	_, err := s.db.Exec(ctx, `
+		INSERT INTO cloud_maintenance (login_id, task, completed_ts)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (login_id, task) DO UPDATE SET completed_ts=excluded.completed_ts
+	`, s.loginID, rehydrateEmptyTask(portalID), time.Now().UnixMilli())
+	return err
+}
+
+// rehydrateKnownEmpty reports whether an earlier rehydrate of the portal
+// recovered nothing and no cloud_message row of the portal has been written
+// since. Rows CloudKit delivers later carry a newer updated_ts and make the
+// rehydrate worth trying again.
+func (s *cloudBackfillStore) rehydrateKnownEmpty(ctx context.Context, portalID string) (bool, error) {
+	var attemptedTS int64
+	err := s.db.QueryRow(ctx,
+		`SELECT completed_ts FROM cloud_maintenance WHERE login_id=$1 AND task=$2`,
+		s.loginID, rehydrateEmptyTask(portalID),
+	).Scan(&attemptedTS)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var one int
+	err = s.db.QueryRow(ctx, `
+		SELECT 1 FROM cloud_message
+		WHERE login_id=$1 AND portal_id=$2 AND COALESCE(updated_ts, 0) > $3
+		LIMIT 1
+	`, s.loginID, portalID, attemptedTS).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return true, nil
+	}
+	return false, err
+}
+
+// pendingForwardBackfillContent reports whether a forward backfill of the
+// portal, anchored at (afterTS, afterGUID) or unanchored when hasAnchor is
+// false, would find rows that matter for message ordering. The row set is the
+// one listForwardMessages / listLatestMessages read. Within it:
+//
+//   - any row that is not a tapback counts. It may become a room message, and
+//     a live message delivered first would move the anchor past it.
+//   - a tapback row counts only when it was written at or after sinceMS (the
+//     start of this run's CloudKit sync, which stamps updated_ts on everything
+//     it imports). Tapbacks become reactions, not messages, so an older tapback
+//     row stays "newer than the room" forever and was already delivered by the
+//     run that imported it; a new one must still be picked up before a live
+//     message moves the anchor past it.
+func (s *cloudBackfillStore) pendingForwardBackfillContent(ctx context.Context, portalID string, hasAnchor bool, afterTS int64, afterGUID string, sinceMS int64) (bool, error) {
+	query := `
+		SELECT 1 FROM cloud_message
+		WHERE login_id=$1 AND portal_id=$2 AND deleted=FALSE AND record_name <> ''
+		  AND (COALESCE(tapback_type, 0) < 2000 OR COALESCE(updated_ts, 0) >= $3)`
+	args := []any{s.loginID, portalID, sinceMS}
+	if hasAnchor {
+		query += ` AND (timestamp_ms > $4 OR (timestamp_ms = $4 AND guid > $5))`
+		args = append(args, afterTS, afterGUID)
+	}
+	var one int
+	err := s.db.QueryRow(ctx, query+` LIMIT 1`, args...).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 func (s *cloudBackfillStore) portalsFullyBackfilledNoNewContent(ctx context.Context) (map[string]bool, error) {
 	messageTable := "cloud_message cm"
 	if s.db.Dialect == dbutil.SQLite {

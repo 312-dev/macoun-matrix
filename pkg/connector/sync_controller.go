@@ -2098,6 +2098,7 @@ func (c *IMClient) runCloudSyncController(log zerolog.Logger) {
 		c.cloudSyncRunningLock.Unlock()
 	}()
 	bootstrapFailures := 0
+	atomic.StoreInt64(&c.bootstrapSyncStartMS, time.Now().UnixMilli())
 	for {
 		_, err := c.runCloudSyncOnceSerialized(ctx, log, true)
 		if err != nil {

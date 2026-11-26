@@ -613,6 +613,11 @@ type IMClient struct {
 	// narrowed the hold to the chats that still need it (macoun_startup_hold.go).
 	startupHoldScoped atomic.Bool
 
+	// bootstrapSyncStartMS is the unix-millisecond time at which this run's
+	// bootstrap CloudKit sync began. cloud_message rows with a later
+	// updated_ts were imported or touched by this run.
+	bootstrapSyncStartMS int64 // atomic
+
 	// apnsBufferFlushedAt is the unix-millisecond time when the APNs buffer
 	// was flushed after all forward backfills completed. Zero until that event.
 	// Used to enforce a grace window: stale read receipts that were queued in

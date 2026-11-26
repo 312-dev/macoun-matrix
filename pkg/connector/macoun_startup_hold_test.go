@@ -1,6 +1,7 @@
 package connector
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
@@ -132,8 +133,7 @@ func TestStartupHoldReleaseUnheld(t *testing.T) {
 }
 
 func TestStartupHoldDecision(t *testing.T) {
-	t0 := time.UnixMilli(1_700_000_000_000)
-	settled := startupHoldFacts{PortalKnown: true, HasRoom: true, NewestCloud: t0, HasBridged: true, NewestBridged: t0}
+	settled := startupHoldFacts{PortalKnown: true, HasRoom: true}
 	with := func(mod func(*startupHoldFacts)) startupHoldFacts {
 		f := settled
 		mod(&f)
@@ -146,11 +146,9 @@ func TestStartupHoldDecision(t *testing.T) {
 		hold   bool
 	}{
 		{"before the sync and seed finish, everything is held", false, settled, true},
-		{"room exists, CloudKit has nothing newer", true, settled, false},
-		{"room exists, chat was never in CloudKit", true, startupHoldFacts{PortalKnown: true, HasRoom: true}, false},
-		{"room newer than CloudKit", true, with(func(f *startupHoldFacts) { f.NewestBridged = t0.Add(time.Minute) }), false},
-		{"CloudKit has newer history: forward backfill pending", true, with(func(f *startupHoldFacts) { f.NewestCloud = t0.Add(time.Millisecond) }), true},
-		{"CloudKit history but empty room", true, with(func(f *startupHoldFacts) { f.HasBridged = false }), true},
+		{"room exists, no forward backfill", true, settled, false},
+		{"forward backfill with content", true, with(func(f *startupHoldFacts) { f.BackfillWouldRun, f.BackfillHasContent = true, true }), true},
+		{"forward backfill would run but finds nothing that matters", true, with(func(f *startupHoldFacts) { f.BackfillWouldRun = true }), false},
 		{"no room yet", true, with(func(f *startupHoldFacts) { f.HasRoom = false }), true},
 		{"deleted chat", true, with(func(f *startupHoldFacts) { f.Deleted = true }), true},
 		{"unknown chat", true, startupHoldFacts{}, true},
@@ -163,26 +161,128 @@ func TestStartupHoldDecision(t *testing.T) {
 	}
 }
 
+func TestStartupHoldForwardBackfillWouldRun(t *testing.T) {
+	t0 := time.UnixMilli(1_700_000_000_000)
+	cases := []struct {
+		name       string
+		cloudMS    int64
+		hasBridged bool
+		bridged    time.Time
+		want       bool
+	}{
+		{"chat was never in CloudKit", 0, true, t0, false},
+		{"CloudKit and room agree", t0.UnixMilli(), true, t0, false},
+		{"room is newer", t0.UnixMilli(), true, t0.Add(time.Minute), false},
+		{"CloudKit is newer", t0.UnixMilli() + 1, true, t0, true},
+		{"CloudKit rows but empty room", t0.UnixMilli(), false, time.Time{}, true},
+	}
+	for _, tc := range cases {
+		if got := forwardBackfillWouldRun(tc.cloudMS, tc.hasBridged, tc.bridged); got != tc.want {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func insertStartupHoldRow(t *testing.T, ctx context.Context, store *cloudBackfillStore, portalID, guid, recordName string, ts, updatedTS int64, tapbackType any, deleted bool) {
+	t.Helper()
+	if _, err := store.db.Exec(ctx,
+		`INSERT INTO cloud_message (login_id, record_name, guid, portal_id, sender, is_from_me, service, timestamp_ms, created_ts, updated_ts, deleted, tapback_type)
+		 VALUES ($1, $2, $3, $4, 'x', FALSE, 'iMessage', $5, $6, $6, $7, $8)`,
+		store.loginID, recordName, guid, portalID, ts, updatedTS, deleted, tapbackType,
+	); err != nil {
+		t.Fatalf("insert cloud_message %s: %v", guid, err)
+	}
+}
+
 // TestStartupHoldNewestLiveCloudMessageTS: the value compared against the room
 // must count what the portal pass counts: live CloudKit records only.
 func TestStartupHoldNewestLiveCloudMessageTS(t *testing.T) {
 	ctx, store := recycleBinFixture(t)
 	const portalID = "tel:+15550101"
-	insertRecycleTestMessage(t, ctx, store, portalID, "live", 1000, false)
-	insertRecycleTestMessage(t, ctx, store, portalID, "deleted-newer", 3000, true)
+	insertStartupHoldRow(t, ctx, store, portalID, "live", "rec-live", 1000, 1, nil, false)
+	insertStartupHoldRow(t, ctx, store, portalID, "deleted-newer", "rec-del", 3000, 1, nil, true)
 	// A UUID stub, as persistMessageUUID writes for a live APNs message.
-	if _, err := store.db.Exec(ctx,
-		`INSERT INTO cloud_message (login_id, record_name, guid, portal_id, sender, is_from_me, service, timestamp_ms, created_ts, updated_ts, deleted)
-		 VALUES ($1, '', 'stub-newest', $2, 'x', FALSE, 'iMessage', 5000, 1, 1, FALSE)`,
-		store.loginID, portalID,
-	); err != nil {
-		t.Fatal(err)
-	}
+	insertStartupHoldRow(t, ctx, store, portalID, "stub-newest", "", 5000, 1, nil, false)
 	got, err := store.newestLiveCloudMessageTS(ctx, portalID)
 	if err != nil || got != 1000 {
 		t.Fatalf("newestLiveCloudMessageTS = %d, %v; want 1000", got, err)
 	}
 	if got, err = store.newestLiveCloudMessageTS(ctx, "tel:+15550199"); err != nil || got != 0 {
 		t.Fatalf("portal without rows: %d, %v; want 0", got, err)
+	}
+}
+
+// TestStartupHoldPendingForwardBackfillContent: which CloudKit rows past the
+// room's newest message keep a chat held.
+func TestStartupHoldPendingForwardBackfillContent(t *testing.T) {
+	const (
+		anchorTS  = int64(1000)
+		syncStart = int64(50_000) // updated_ts values at or above this are "this run"
+	)
+	type row struct {
+		guid      string
+		ts        int64
+		updatedTS int64
+		tapback   any
+		deleted   bool
+		stub      bool
+	}
+	cases := []struct {
+		name      string
+		rows      []row
+		hasAnchor bool
+		want      bool
+	}{
+		{"nothing after the anchor", []row{{guid: "a", ts: 900, updatedTS: 1}}, true, false},
+		{"old tapback tail (delivered by an earlier run)", []row{{guid: "t", ts: 2000, updatedTS: 40_000, tapback: 2001}}, true, false},
+		{"tapback imported by this run", []row{{guid: "t", ts: 2000, updatedTS: 50_000, tapback: 2001}}, true, true},
+		{"message after the anchor", []row{{guid: "m", ts: 2000, updatedTS: 1}}, true, true},
+		{"message at the anchor timestamp with a later GUID", []row{{guid: "zzz", ts: 1000, updatedTS: 1}}, true, true},
+		{"the anchor itself", []row{{guid: "anchor", ts: 1000, updatedTS: 1}}, true, false},
+		{"deleted message after the anchor", []row{{guid: "d", ts: 2000, updatedTS: 1, deleted: true}}, true, false},
+		{"UUID stub of a live APNs message", []row{{guid: "s", ts: 2000, updatedTS: 60_000, stub: true}}, true, false},
+		{"empty room, CloudKit has a message", []row{{guid: "a", ts: 900, updatedTS: 1}}, false, true},
+		{"empty room, only an old tapback", []row{{guid: "t", ts: 900, updatedTS: 1, tapback: 2000}}, false, false},
+	}
+	for i, tc := range cases {
+		ctx, store := recycleBinFixture(t)
+		portalID := "tel:+1555020" + string(rune('0'+i))
+		for _, r := range tc.rows {
+			recordName := "rec-" + r.guid
+			if r.stub {
+				recordName = ""
+			}
+			insertStartupHoldRow(t, ctx, store, portalID, r.guid, recordName, r.ts, r.updatedTS, r.tapback, r.deleted)
+		}
+		got, err := store.pendingForwardBackfillContent(ctx, portalID, tc.hasAnchor, anchorTS, "anchor", syncStart)
+		if err != nil || got != tc.want {
+			t.Errorf("%s: got %v, %v; want %v", tc.name, got, err, tc.want)
+		}
+	}
+}
+
+// TestRehydrateKnownEmpty: a rehydrate that recovered nothing is not repeated
+// until the portal gets rows written after it.
+func TestRehydrateKnownEmpty(t *testing.T) {
+	ctx, store := recycleBinFixture(t)
+	const portalID = "tel:+15550300"
+	insertStartupHoldRow(t, ctx, store, portalID, "old", "rec-old", 1000, 1, nil, false)
+
+	if known, err := store.rehydrateKnownEmpty(ctx, portalID); err != nil || known {
+		t.Fatalf("before any rehydrate: known=%v err=%v, want false", known, err)
+	}
+	if err := store.noteRehydrateFoundNothing(ctx, portalID); err != nil {
+		t.Fatal(err)
+	}
+	if known, err := store.rehydrateKnownEmpty(ctx, portalID); err != nil || !known {
+		t.Fatalf("after an empty rehydrate: known=%v err=%v, want true", known, err)
+	}
+	if known, err := store.rehydrateKnownEmpty(ctx, "tel:+15550301"); err != nil || known {
+		t.Fatalf("another portal: known=%v err=%v, want false", known, err)
+	}
+	// CloudKit delivers a row later.
+	insertStartupHoldRow(t, ctx, store, portalID, "new", "rec-new", 2000, time.Now().Add(time.Minute).UnixMilli(), nil, false)
+	if known, err := store.rehydrateKnownEmpty(ctx, portalID); err != nil || known {
+		t.Fatalf("after a newer row: known=%v err=%v, want false", known, err)
 	}
 }
