@@ -3280,6 +3280,21 @@ pub struct WrappedCloudSyncMessagesPage {
     pub messages: Vec<WrappedCloudSyncMessage>,
 }
 
+/// One page of a recycle-bin zone's change feed; see `sync_recoverable_zone`.
+#[derive(uniffi::Record, Clone)]
+pub struct WrappedRecoverableZonePage {
+    pub continuation_token: Option<String>,
+    pub status: i32,
+    pub done: bool,
+    pub chats: Vec<WrappedCloudSyncChat>,
+    /// `guid|base64-metadata`, one per recoverable message record.
+    pub message_entries: Vec<String>,
+    /// CloudKit record name of `message_entries[i]`.
+    pub message_record_names: Vec<String>,
+    /// Records that left the zone (restored or purged).
+    pub removed_record_names: Vec<String>,
+}
+
 #[derive(uniffi::Record, Clone)]
 pub struct WrappedCloudSyncAttachmentsPage {
     pub continuation_token: Option<String>,
@@ -10244,6 +10259,154 @@ impl Client {
 
         info!("list_recoverable_message_guids: found {} deleted message GUID(s) [{}]", guids.len(), zone_diag.join(" | "));
         Ok(guids)
+    }
+
+    /// Fetch one page of the change feed of a recycle-bin zone
+    /// (`recoverableMessageDeleteZone` or `chatBotRecoverableMessageDeleteZone`),
+    /// starting at `continuation_token` (base64, `None` for the start of the
+    /// feed). One CloudKit request per call.
+    ///
+    /// The page carries everything the feed says about the zone: chat records,
+    /// recoverable message entries (same `guid|base64-metadata` encoding as
+    /// `list_recoverable_message_guids`, with the CloudKit record name of each
+    /// in `message_record_names` at the same index) and the record names of
+    /// tombstones, which mean a record left the recycle bin (restored by the
+    /// user or purged by Apple). A caller that stores the entries and the
+    /// token can keep a complete picture of the zone by reading only the
+    /// changes since its last call, where `list_recoverable_chats` and
+    /// `list_recoverable_message_guids` each re-read the feed from the start
+    /// and stop after 256 pages.
+    ///
+    /// `done` is true when the feed has no more changes for now. The token of
+    /// a page is `None` when CloudKit returned an empty one; the caller keeps
+    /// its previous token in that case.
+    pub async fn sync_recoverable_zone(
+        &self,
+        zone_name: String,
+        continuation_token: Option<String>,
+    ) -> Result<WrappedRecoverableZonePage, WrappedError> {
+        use rustpush::cloudkit::{pcs_keys_for_record, FetchRecordChangesOperation, CloudKitSession, NO_ASSETS};
+        use rustpush::cloudkit_proto::CloudKitRecord;
+        use rustpush::cloud_messages::{MESSAGES_SERVICE, CloudChat, CloudMessage, RemoteCloudMessage};
+
+        if zone_name != "recoverableMessageDeleteZone" && zone_name != "chatBotRecoverableMessageDeleteZone" {
+            return Err(WrappedError::GenericError {
+                msg: format!("sync_recoverable_zone: {} is not a recycle-bin zone", zone_name),
+            });
+        }
+        let token = decode_continuation_token(continuation_token)?;
+        let cloud_messages = self.get_or_init_cloud_messages_client().await?;
+        let container = cloud_messages.get_container().await
+            .map_err(|e| WrappedError::GenericError { msg: format!("Failed to get CloudKit container: {}", e) })?;
+        let zone_id = container.private_zone(zone_name.clone());
+        let key = container
+            .get_zone_encryption_config(&zone_id, &cloud_messages.keychain, &MESSAGES_SERVICE)
+            .await
+            .map_err(|e| WrappedError::GenericError {
+                msg: format!("Failed to get zone key for {}: {}", zone_name, e),
+            })?;
+
+        let (_assets, response) = container
+            .perform(
+                &CloudKitSession::new(),
+                FetchRecordChangesOperation::new(zone_id, token, &NO_ASSETS),
+            )
+            .await
+            .map_err(|e| WrappedError::GenericError {
+                msg: format!("Failed to fetch recycle-bin changes from {}: {}", zone_name, e),
+            })?;
+
+        let status = response.status();
+        let mut page = WrappedRecoverableZonePage {
+            continuation_token: None,
+            status,
+            done: false,
+            chats: Vec::new(),
+            message_entries: Vec::new(),
+            message_record_names: Vec::new(),
+            removed_record_names: Vec::new(),
+        };
+        let mut skipped = 0usize;
+
+        for change in &response.change {
+            let identifier = change.identifier.as_ref()
+                .and_then(|i| i.value.as_ref())
+                .map(|v| v.name().to_string())
+                .unwrap_or_default();
+            if identifier.is_empty() {
+                skipped += 1;
+                continue;
+            }
+            let record = match &change.record {
+                Some(r) => r,
+                None => {
+                    page.removed_record_names.push(identifier);
+                    continue;
+                }
+            };
+            let record_type = record.r#type.as_ref()
+                .map(|t| t.name().to_string())
+                .unwrap_or_default();
+
+            if record_type == "recoverableMessage" {
+                let pcskey = match pcs_keys_for_record(record, &key) {
+                    Ok(k) => k,
+                    Err(_) => {
+                        skipped += 1;
+                        continue;
+                    }
+                };
+                // Record decode and proto decode both unwrap, so both stay
+                // inside the catch_unwind (as in list_recoverable_message_guids).
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    CloudMessage::from(RemoteCloudMessage::from_record_encrypted(
+                        &record.record_field,
+                        Some(&pcskey),
+                    ))
+                }));
+                match result {
+                    Ok(msg) if !msg.guid.is_empty() => {
+                        page.message_entries.push(encode_recoverable_message_entry(&msg.guid, &identifier, &msg));
+                        page.message_record_names.push(identifier);
+                    }
+                    _ => skipped += 1,
+                }
+                continue;
+            }
+
+            if !record_looks_chat_like(&record.record_field) {
+                skipped += 1;
+                continue;
+            }
+            let pcskey = match pcs_keys_for_record(record, &key) {
+                Ok(k) => k,
+                Err(e) => {
+                    warn!("sync_recoverable_zone: skipping record {} in {}: PCS key error: {}", identifier, zone_name, e);
+                    skipped += 1;
+                    continue;
+                }
+            };
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                CloudChat::from_record_encrypted(&record.record_field, Some(&pcskey))
+            }));
+            match result.ok().and_then(|chat| wrap_recoverable_chat(identifier.clone(), chat)) {
+                Some(chat) => page.chats.push(chat),
+                None => {
+                    warn!("sync_recoverable_zone: skipping chat-like record {} in {} (type={}): decode failed or incomplete", identifier, zone_name, record_type);
+                    skipped += 1;
+                }
+            }
+        }
+
+        let next_token = response.sync_continuation_token().to_vec();
+        page.done = status == 3 || next_token.is_empty();
+        page.continuation_token = encode_continuation_token(next_token);
+        debug!(
+            "sync_recoverable_zone: zone={} changes={} status={} done={} chats={} messages={} removed={} skipped={}",
+            zone_name, response.change.len(), status, page.done,
+            page.chats.len(), page.message_entries.len(), page.removed_record_names.len(), skipped
+        );
+        Ok(page)
     }
 
     /// Raw diagnostic dump of the recoverable zone. Returns a human-readable

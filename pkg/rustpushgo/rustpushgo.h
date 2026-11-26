@@ -152,6 +152,13 @@ void* uniffi_rustpushgo_fn_method_client_cloud_sync_chats(
 	RustCallStatus* out_status
 );
 
+void* uniffi_rustpushgo_fn_method_client_sync_recoverable_zone(
+	void* ptr,
+	RustBuffer zone_name,
+	RustBuffer continuation_token,
+	RustCallStatus* out_status
+);
+
 void* uniffi_rustpushgo_fn_method_client_cloud_sync_messages(
 	void* ptr,
 	RustBuffer continuation_token,

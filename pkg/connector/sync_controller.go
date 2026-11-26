@@ -280,17 +280,18 @@ func (c *IMClient) pruneRecentlyDeletedPortals(log zerolog.Logger) {
 	}
 }
 
-// seedDeletedChatsFromRecycleBin reads recoverable chat/message data from
-// Apple's recycle-bin zones, classifies which portals still look deleted, and
-// also auto-recovers portals that were previously soft-deleted locally but
-// whose current CloudKit state now looks active again.
+// seedDeletedChatsFromRecycleBin updates the local copy of Apple's recycle-bin
+// zones, classifies which portals still look deleted, and also auto-recovers
+// portals that were previously soft-deleted locally but whose current CloudKit
+// state now looks active again. Auto-recovery needs the whole recycle bin to
+// have been read; see recycleBinMayAutoRecover.
 func (c *IMClient) seedDeletedChatsFromRecycleBin(log zerolog.Logger) {
 	if c.client == nil || c.cloudStore == nil {
 		return
 	}
-	// ListRecoverableChats / ListRecoverableMessageGuids cross into the
-	// CloudKit FFI path, which has reachable panic sites upstream
-	// (cloudkit.rs type assertions). A leaf-level recover here lets the
+	// syncRecycleBin crosses into the CloudKit FFI path (SyncRecoverableZone),
+	// which has reachable panic sites upstream (cloudkit.rs type assertions).
+	// A leaf-level recover here lets the
 	// sync controller goroutine continue to setCloudSyncDone() even if one
 	// seed pass panics — unblocking the APNs buffer is more important than
 	// crashing the whole process over a seed-pass failure.
@@ -313,32 +314,25 @@ func (c *IMClient) seedDeletedChatsFromRecycleBin(log zerolog.Logger) {
 		return overridden
 	}
 
-	// Skip the (expensive, full 256-page-per-zone) recycle-bin scan if it ran
-	// recently. Known deletions are already PERSISTED: insertDeletedChatTombstone +
-	// deleteLocalChatByPortalID soft-delete the cloud_chat rows, which survive
-	// restarts, so createPortalsFromCloudSync already honours them WITHOUT a fresh
-	// scan. Re-scanning on every startup is what makes a heavily-deleted account
-	// (James: huge recycle bin) take minutes to become send-ready —
-	// ListRecoverableChats + ListRecoverableMessageGuids each walk up to 256
-	// CloudKit pages per zone every time (the FFI resets its continuation token to
-	// None each call). The cooldown only bounds how stale a NEW delete/recovery can
-	// be (the next scan picks it up); already-known deletes are never lost.
-	// Incremental sync was rejected on purpose: the recovery pass needs the FULL
-	// recoverable-message snapshot to count per-portal recoverables, so a
-	// continuation token would break recovery.
-	const recycleBinSeedCooldown = 30 * time.Minute
-	seedKey := database.Key("recyclebin.seed.last")
-	if raw := c.Main.Bridge.DB.KV.Get(ctx, seedKey); raw != "" {
-		if last, err := time.Parse(time.RFC3339, raw); err == nil && time.Since(last) < recycleBinSeedCooldown {
-			log.Info().Time("last_seed", last).Dur("cooldown", recycleBinSeedCooldown).
-				Msg("DELETE-SEED: skipping recycle-bin scan — ran recently; persisted soft-deletes already cover known deletions (unblocks rapid restarts)")
-			return
-		}
+	// Bring the local copy of the recycle bin up to date (macoun_recycle_bin.go)
+	// and work from that. Only changes since the previous pass are requested
+	// from CloudKit, so this is cheap enough to run on every start, and the
+	// copy covers the whole change feed however long it is.
+	//
+	// snapshot.Complete says whether the feed was read to its end in this
+	// pass. Detecting deletions works on an incomplete copy (it can only miss
+	// some); undoing a deletion does not, see recycleBinMayAutoRecover.
+	log.Info().Msg("DELETE-SEED: syncing recoverable chats and messages from Apple's recycle bin")
+	snapshot, snapshotErr := c.cloudStore.syncRecycleBin(ctx, c.client, log)
+	if snapshotErr == nil {
+		log.Info().
+			Int("pages_read", snapshot.PagesRead).
+			Bool("complete", snapshot.Complete).
+			Int("recoverable_chats", len(snapshot.Chats)).
+			Int("recoverable_guids", len(snapshot.Entries)).
+			Msg("DELETE-SEED: recycle-bin copy is up to date")
 	}
-	c.Main.Bridge.DB.KV.Set(ctx, seedKey, time.Now().Format(time.RFC3339))
-
-	log.Info().Msg("DELETE-SEED: reading recoverable chats from Apple's recycle bin")
-	recoverableChats, chatErr := c.client.ListRecoverableChats()
+	recoverableChats, chatErr := snapshot.Chats, snapshotErr
 	if chatErr != nil {
 		log.Warn().Err(chatErr).Msg("DELETE-SEED: failed to read recoverable chats")
 	} else {
@@ -478,8 +472,7 @@ func (c *IMClient) seedDeletedChatsFromRecycleBin(log zerolog.Logger) {
 		}
 	}
 
-	log.Info().Msg("DELETE-SEED: reading recoverable message GUIDs from Apple's recycle bin")
-	guids, err := c.client.ListRecoverableMessageGuids()
+	guids, err := snapshot.Entries, snapshotErr
 	if err != nil {
 		log.Warn().Err(err).Msg("DELETE-SEED: failed to read recoverable message GUIDs")
 	} else if len(guids) == 0 {
@@ -503,7 +496,14 @@ func (c *IMClient) seedDeletedChatsFromRecycleBin(log zerolog.Logger) {
 			var deletedStates []recycleBinPortalState
 			autoRecovered := 0
 			for _, state := range states {
-				if state.NeedsUndelete() {
+				if state.NeedsUndelete() && !snapshot.Complete {
+					log.Warn().
+						Str("portal_id", state.PortalID).
+						Int("recoverable", state.Recoverable).
+						Int("recoverable_suffix", state.RecoverableSuffix).
+						Msg("DELETE-SEED: locally deleted chat is not shown as deleted by the part of the recycle bin read so far; keeping it deleted until the whole recycle bin has been read")
+				}
+				if recycleBinMayAutoRecover(state, snapshot.Complete) {
 					undeleted, err := c.cloudStore.undeleteCloudMessagesByPortalID(ctx, state.PortalID)
 					if err != nil {
 						log.Warn().Err(err).Str("portal_id", state.PortalID).
