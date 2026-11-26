@@ -20,8 +20,9 @@
 //     the original uploader's key.
 //
 // The cache is process-local and populated aggressively during sync.
-// Nothing is persisted — if the bridge restarts, cache is rebuilt on
-// the next sync cycle.
+// The cache itself is not persisted; every sync pass refills it, from
+// the attachment index (macoun_attachment_index.go) plus the records
+// CloudKit reports since.
 
 package connector
 

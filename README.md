@@ -624,6 +624,9 @@ pkg/connector/                              # bridgev2 connector — the main Go
   ├── pending_attachment_store.go           #   DB-backed queue of attachments awaiting retry
   ├── cloud_backfill_store.go               #   CloudKit backfill message store + paging
   ├── recycle_bin_hints.go                  #   recoverable-message metadata for CloudKit recycle bin
+  ├── macoun_recycle_bin.go                 #   local copy of the CloudKit recycle bin, read incrementally
+  ├── macoun_attachment_index.go            #   encrypted index of the CloudKit attachment zone
+  ├── macoun_startup_hold.go                #   which incoming messages wait for the startup pass
   ├── heic.go                               #   HEIC → JPEG conversion (libheif)
   ├── audioconvert.go                       #   audio remux to M4A / CAF
   ├── urlpreview.go                         #   OpenGraph / Twitter Card URL-preview extractor

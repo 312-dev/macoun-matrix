@@ -2083,8 +2083,9 @@ func (c *IMClient) runCloudSyncController(log zerolog.Logger) {
 	// stay closed until sync succeeds — otherwise APNs echoes can create
 	// portals for deleted chats because cloud_message has no UUID data
 	// and recentlyDeletedPortals has no tombstone entries.
-	// Messages for EXISTING portals are still delivered during this time
-	// (handleMessage only checks cloudSyncDone for NEW portal creation).
+	// Incoming messages wait in the reorder buffer during this time (see
+	// messageBuffer); handleMessage itself only checks cloudSyncDone for NEW
+	// portal creation.
 	// macoun: exception for installs that have synced before, which open the
 	// gate after macounBootstrapFailOpenAfter failures; see macoun_bootstrap.go.
 	c.cloudSyncRunningLock.Lock()

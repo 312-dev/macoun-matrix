@@ -665,7 +665,7 @@ type bufferedMessage struct {
 // messageBuffer collects incoming APNs messages and dispatches them in
 // chronological (timestamp) order. While CloudKit sync is in progress
 // (!cloudSyncDone), messages the startup hold applies to accumulate without
-// flushing — this prevents APNs messages from being dispatched before
+// flushing. This prevents APNs messages from being dispatched before
 // CloudKit backfill completes, which would cause older CloudKit messages to
 // be skipped by the backfill, and keeps content away from chats whose deleted
 // state is not known yet. Which messages that is: all of them until

@@ -1,3 +1,6 @@
+// macoun-matrix - A Matrix-iMessage puppeting bridge (fork of corten-matrix).
+// SPDX-License-Identifier: MPL-2.0
+
 package rustpushgo
 
 // Hand-written binding for Client::sync_recoverable_zone (src/lib.rs), in the
