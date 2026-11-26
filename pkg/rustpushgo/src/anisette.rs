@@ -51,8 +51,10 @@ const ANISETTE_URL_ENV: &str = "MACOUN_ANISETTE_URL";
 
 /// Where anisette headers come from, in order of preference:
 ///
-/// 1. The Mac relay (nac_relay.rs), when the hardware key or MACOUN_NAC_RELAY_*
-///    names one: the Mac's own AOSKit produces the headers over `GET /anisette`.
+/// 1. An anisette provider speaking the macoun contract (`GET /anisette`):
+///    MACOUN_ANISETTE_PROVIDER_URL if set, else the NAC relay named by the
+///    hardware key or MACOUN_NAC_RELAY_*. On the Mac relay, AOSKit produces
+///    the headers.
 ///    This is the only source that works for a Mac identity since Apple began
 ///    rejecting Android-ADI OTPs (about 2026-10-12, error -29003).
 /// 2. An anisette v3 server named by MACOUN_ANISETTE_URL, through upstream's
@@ -70,7 +72,7 @@ enum AnisetteSource {
 
 fn anisette_source() -> Result<AnisetteSource, AnisetteError> {
     #[cfg(feature = "hardware-key")]
-    if let Some(relay) = crate::nac_relay::active() {
+    if let Some(relay) = crate::nac_relay::anisette_provider() {
         return Ok(AnisetteSource::Relay(relay));
     }
     match std::env::var(ANISETTE_URL_ENV) {
@@ -90,8 +92,8 @@ fn anisette_source() -> Result<AnisetteSource, AnisetteError> {
             Ok(AnisetteSource::V3(url))
         }
         _ => Err(AnisetteError::InvalidArgument(format!(
-            "no anisette source configured: give the hardware key a NAC relay (or set \
-             MACOUN_NAC_RELAY_URL) so the Mac relay serves anisette, or set {ANISETTE_URL_ENV}"
+            "no anisette source configured: set MACOUN_NAC_RELAY_URL (or give the hardware key a \
+             relay) so the relay serves anisette, or MACOUN_ANISETTE_PROVIDER_URL, or {ANISETTE_URL_ENV}"
         ))),
     }
 }

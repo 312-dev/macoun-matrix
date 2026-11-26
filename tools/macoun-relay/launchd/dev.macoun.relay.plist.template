@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macoun-relay: NAC validation data + Apple anisette for macoun-matrix, over Tailscale only.
+  Install: replace @RELAY_DIR@ (for example /Users/you/macoun-relay) and @LISTEN_IP@ (the Mac Tailscale IP); see docs/setup.md. The bearer token is read by the relay from
+  @RELAY_DIR@/state/Library/Application Support/nac-relay/token (mode 0600); it is not
+  passed here. The relay caps logs/relay.log itself (5 MB x 4 files); launchd.err only gets
+  crashes and is trimmed at startup.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>dev.macoun.relay</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>@RELAY_DIR@/bin/nac-relay</string>
+		<string>-addr</string>
+		<string>@LISTEN_IP@</string>
+		<string>-port</string>
+		<string>5001</string>
+		<string>-log</string>
+		<string>@RELAY_DIR@/logs/relay.log</string>
+		<string>-log-max-mb</string>
+		<string>5</string>
+		<string>-stderr-log</string>
+		<string>@RELAY_DIR@/logs/launchd.err</string>
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>HOME</key>
+		<string>@RELAY_DIR@/state</string>
+	</dict>
+	<key>WorkingDirectory</key>
+	<string>@RELAY_DIR@</string>
+	<key>LimitLoadToSessionType</key>
+	<string>Aqua</string>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>30</integer>
+	<key>Umask</key>
+	<integer>63</integer>
+	<key>StandardOutPath</key>
+	<string>@RELAY_DIR@/logs/launchd.out</string>
+	<key>StandardErrorPath</key>
+	<string>@RELAY_DIR@/logs/launchd.err</string>
+</dict>
+</plist>

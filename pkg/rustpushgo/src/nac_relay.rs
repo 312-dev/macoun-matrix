@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
-// NAC relay client: fetch IDS validation data from a Mac over HTTPS.
+// Validation-data and anisette provider client: fetch IDS validation data and
+// anisette headers over HTTPS from the Mac relay (tools/macoun-relay) or any
+// service that speaks the same contract (docs/provider-contract.md).
 //
 // `RelayOSConfig` is taken from corten-matrix commit e2adc79d92 (2026-06-21,
 // pkg/rustpushgo/src/lib.rs), which was published under the GNU Affero General
@@ -100,14 +102,15 @@ impl RelaySettings {
     }
 }
 
-/// Build a client for the relay and, when a fingerprint is pinned, check it on
-/// an unauthenticated `/health` request first, so the bearer token is never
-/// sent to a server that fails the pin. Every later response is checked again.
-/// The relay uses a self-signed certificate, so chain validation is off; the
-/// pin is what authenticates the server.
+/// Build a client for a provider. With a pinned fingerprint (the Mac relay's
+/// self-signed certificate), chain validation is off and the pin is what
+/// authenticates the server: it is checked on an unauthenticated `/health`
+/// request first, so the bearer token is never sent to a server that fails
+/// it, and on every later response. Without a pin, the certificate must chain
+/// to a public CA (a remote provider with a normal certificate).
 async fn relay_client(relay: &RelaySettings) -> Result<reqwest::Client, PushError> {
     let client = reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
+        .danger_accept_invalid_certs(relay.cert_fp.is_some())
         .tls_info(true)
         .timeout(std::time::Duration::from_secs(60))
         .build()
@@ -135,6 +138,24 @@ pub fn set_active(relay: &RelaySettings) {
 /// The registered relay, or one configured only through MACOUN_NAC_RELAY_*.
 pub fn active() -> Option<RelaySettings> {
     ACTIVE.read().ok().and_then(|a| a.clone()).or_else(|| resolve(None, None, None))
+}
+
+/// A separate anisette provider speaking the same contract (`GET /anisette`,
+/// same auth), for setups where anisette comes from a different service than
+/// validation data. Unset: anisette comes from the validation provider.
+pub const ENV_ANISETTE_PROVIDER_URL: &str = "MACOUN_ANISETTE_PROVIDER_URL";
+pub const ENV_ANISETTE_PROVIDER_TOKEN: &str = "MACOUN_ANISETTE_PROVIDER_TOKEN";
+pub const ENV_ANISETTE_PROVIDER_CERT_FP: &str = "MACOUN_ANISETTE_PROVIDER_CERT_FP";
+
+pub fn anisette_provider() -> Option<RelaySettings> {
+    match env_nonempty(ENV_ANISETTE_PROVIDER_URL) {
+        Some(url) => Some(RelaySettings {
+            url: url.trim_end_matches('/').to_string(),
+            token: env_nonempty(ENV_ANISETTE_PROVIDER_TOKEN),
+            cert_fp: env_nonempty(ENV_ANISETTE_PROVIDER_CERT_FP).map(|fp| normalize_fp(&fp)),
+        }),
+        None => active(),
+    }
 }
 
 /// Anisette headers from the relay's `GET /anisette` endpoint (macoun-matrix
@@ -186,7 +207,7 @@ pub struct RelayOSConfig {
 impl RelayOSConfig {
     pub fn new(inner: Arc<rustpush::macos::MacOSConfig>, relay: RelaySettings) -> Self {
         if relay.cert_fp.is_none() {
-            warn!("NAC relay at {} has no pinned certificate fingerprint; any certificate is accepted", relay.url);
+            info!("NAC relay at {} has no pinned certificate fingerprint; its certificate must chain to a public CA", relay.url);
         }
         if relay.token.is_none() {
             warn!("NAC relay at {} has no bearer token", relay.url);
@@ -268,6 +289,18 @@ mod tests {
         assert_eq!(s.cert_fp.as_deref(), Some("abcdef"));
         let s = resolve(Some("https://h:5001/validation-data".into()), None, None).unwrap();
         assert_eq!(s.url, "https://h:5001/validation-data");
+    }
+
+    #[test]
+    fn separate_anisette_provider_from_env() {
+        std::env::set_var(ENV_ANISETTE_PROVIDER_URL, "https://anisette.example/");
+        std::env::set_var(ENV_ANISETTE_PROVIDER_CERT_FP, "AA:BB");
+        let p = anisette_provider().unwrap();
+        std::env::remove_var(ENV_ANISETTE_PROVIDER_URL);
+        std::env::remove_var(ENV_ANISETTE_PROVIDER_CERT_FP);
+        assert_eq!(p.base_url(), "https://anisette.example");
+        assert_eq!(p.cert_fp.as_deref(), Some("aabb"));
+        assert!(p.token.is_none());
     }
 
     #[test]

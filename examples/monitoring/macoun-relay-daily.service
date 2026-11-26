@@ -1,0 +1,6 @@
+[Unit]
+Description=macoun IDS cert expiry and Mac Tailscale key expiry check
+After=network-online.target tailscaled.service
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/macoun-relay-check.sh daily

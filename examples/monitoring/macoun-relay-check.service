@@ -1,0 +1,8 @@
+[Unit]
+Description=macoun relay health probe (Mac NAC + anisette over Tailscale)
+After=network-online.target tailscaled.service
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/macoun-relay-check.sh health
+# A failing probe exits 1; that is the expected "down" state, not a unit failure.
+SuccessExitStatus=1
