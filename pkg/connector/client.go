@@ -7472,7 +7472,8 @@ const (
 	// still perform them, but no human-reachable level (Matrix tops out at 100
 	// in practice) can. The homeserver enforces this, so a user's attempt to
 	// tombstone the room, toggle encryption, set server ACLs, invite/kick/ban,
-	// or redact someone else's message is rejected outright. Power-level edits
+	// or redact someone else's message is rejected outright. (Invite and kick
+	// are open to one user in iMessage group rooms; see groupMembershipLevels.) Power-level edits
 	// themselves are intentionally NOT locked here — they're allowed through and
 	// then rubberbanded by HandleMatrixPowerLevels.
 	plLockLevel = 9000
@@ -7510,16 +7511,26 @@ const (
 //     the escalation vectors that don't arrive as a user event — `set-pl` and
 //     the homeserver admin API both write power levels as the bot, which the
 //     framework filters out before HandleMatrixPowerLevels would ever see them.
-//     This is safe against notice spam because the bridge never grants normal
-//     users an explicit entry above users_default, so the reset only fires on a
-//     genuine escalation, not on every resync.
+//     This is safe against notice spam because the only explicit entry above
+//     users_default the bridge grants is the group manager's (macoun_groups.go),
+//     which the reset allows, so it only fires on a genuine escalation, not on
+//     every resync.
 //
 // ctx/portal may be nil (the chat.db path has neither in scope); the reset still
 // happens, only the m.notice is skipped.
 func (c *IMClient) hardenedPowerLevels(ctx context.Context, portal *bridgev2.Portal) *bridgev2.PowerLevelOverrides {
+	// In an iMessage group whose members can be changed from Matrix, the
+	// login's user may invite and remove; see "Who may invite and remove" in
+	// macoun_groups.go for the exact scope.
 	manager := c.groupManagerFor(portal)
 	inviteLevel, kickLevel := groupMembershipLevels(manager != "")
+	var usersDefault *int
+	if manager != "" {
+		// The manager's level is defined against a baseline of 0.
+		usersDefault = ptr.Ptr(0)
+	}
 	return &bridgev2.PowerLevelOverrides{
+		UsersDefault:  usersDefault,
 		EventsDefault: ptr.Ptr(0), // ghosts + users can always send messages
 		Events: map[event.Type]int{
 			// NOTE: m.room.power_levels is deliberately NOT locked. On homeservers

@@ -354,13 +354,25 @@ func groupMembershipPlan(change bridgev2.MembershipChangeType, current []string,
 	return next, nil
 }
 
-// HandleMatrixMembership adds or removes an iMessage group participant when a
-// ghost is invited to or removed from the room, and leaves the group when the
-// user leaves the room (bridgev2 only forwards that with bridge_matrix_leave
-// enabled). Rooms keep invite and kick locked for Matrix users
-// (hardenedPowerLevels), so on most homeservers these events only arrive as
-// Beeper state requests; the group-add, group-remove and group-leave commands
-// (macoun_group_commands.go) reach the same code from any client.
+// HandleMatrixMembership is the room's own invite, remove and leave:
+//
+//   - inviting an iMessage ghost adds that person to the group, after the same
+//     reachability check new-group makes, and the ghost then joins the room;
+//   - removing a ghost removes the person, within the three-person rule;
+//   - leaving the room leaves the group (bridgev2 only forwards that with
+//     bridge_matrix_leave enabled).
+//
+// The room lets its group manager invite anyone, because Matrix power levels
+// cannot tell a ghost from a person. So the invite of anything that is not an
+// iMessage ghost is withdrawn by the bridge bot as soon as it arrives here,
+// with a notice saying why. The same happens to a ghost whose invite cannot
+// be carried out, and a ghost whose removal iMessage would refuse is put back:
+// the room must not show a membership the group does not have. A change that
+// came as a state request was never applied to the room, so it only gets its
+// error.
+//
+// The group-add, group-remove and group-leave commands
+// (macoun_group_commands.go) reach the same group code without room events.
 func (c *IMClient) HandleMatrixMembership(ctx context.Context, msg *bridgev2.MatrixMembershipChange) (*bridgev2.MatrixMembershipResult, error) {
 	portalID := string(msg.Portal.ID)
 	isGroup := strings.HasPrefix(portalID, "gid:") || strings.Contains(portalID, ",")
@@ -368,16 +380,67 @@ func (c *IMClient) HandleMatrixMembership(ctx context.Context, msg *bridgev2.Mat
 		// Leaving the room of a direct chat changes nothing on Apple's side.
 		return nil, nil
 	}
+	// applied: the homeserver has already put the change into the room.
+	applied := msg.Event != nil && !msg.IsStateRequest
+	var targetMXID id.UserID
+	if msg.Event != nil {
+		targetMXID = id.UserID(msg.Event.GetStateKey())
+	}
+	ghost, _ := msg.Target.(*bridgev2.Ghost)
+
 	target := ""
-	if msg.Type != bridgev2.Leave {
-		ghost, ok := msg.Target.(*bridgev2.Ghost)
-		if !ok || ghost == nil {
-			return nil, errUnsupportedMembership
+	switch msg.Type {
+	case bridgev2.Invite:
+		if ghost == nil {
+			if applied && targetMXID != "" {
+				c.undoRoomInvite(ctx, msg.Portal, targetMXID, errOnlyGhostInvites)
+			}
+			return nil, errOnlyGhostInvites
 		}
 		target = string(ghost.ID)
+	case bridgev2.Kick, bridgev2.BanJoined:
+		if ghost == nil {
+			// A Matrix user who is not part of the iMessage group: taking them
+			// out of the room needs nothing from Apple.
+			return nil, nil
+		}
+		target = string(ghost.ID)
+	case bridgev2.Leave:
+	default:
+		return nil, errUnsupportedMembership
 	}
+
 	_, err := c.changeGroupParticipants(ctx, msg.Portal, msg.Type, target)
-	return nil, err
+	if err != nil {
+		if applied {
+			switch msg.Type {
+			case bridgev2.Invite:
+				if targetMXID != "" {
+					c.undoRoomInvite(ctx, msg.Portal, targetMXID, err)
+				}
+			case bridgev2.Kick, bridgev2.BanJoined:
+				room := c.groupRoom()
+				room.Notice(ctx, msg.Portal, fmt.Sprintf("%s was not removed from the iMessage group: %v. The room's member list is being restored.", target, err))
+				room.ResyncMembers(msg.Portal)
+			}
+		}
+		return nil, err
+	}
+	if applied && msg.Type == bridgev2.Invite {
+		// The ghost is only invited so far; the resync makes it join.
+		c.groupRoom().ResyncMembers(msg.Portal)
+	}
+	return nil, nil
+}
+
+// undoRoomInvite withdraws an invite the room already shows and says why.
+func (c *IMClient) undoRoomInvite(ctx context.Context, portal *bridgev2.Portal, userID id.UserID, reason error) {
+	room := c.groupRoom()
+	if err := room.RemoveFromRoom(ctx, portal, userID, reason.Error()); err != nil {
+		zerolog.Ctx(ctx).Err(err).Stringer("user_id", userID).Str("portal_id", string(portal.ID)).
+			Msg("Failed to withdraw an invite that cannot be bridged")
+	}
+	room.Notice(ctx, portal, fmt.Sprintf("The invite of %s was withdrawn: %v.", userID, reason))
 }
 
 // changeGroupParticipants applies one membership change (bridgev2.Invite, Kick
@@ -617,6 +680,31 @@ func (c *IMClient) CreateGroup(ctx context.Context, params *bridgev2.GroupCreate
 	return &bridgev2.CreateChatResponse{PortalKey: portalKey, PortalInfo: info}, nil
 }
 
+// Who may invite and remove in a portal room.
+//
+// Every portal room locks invite and kick at plLockLevel and resets any user
+// who rises above the room default (hardenedPowerLevels, resetEscalatedUsers).
+// The exception is deliberately small:
+//
+//   - which rooms: gid: portals of iMessage groups, the only ones whose
+//     members this bridge can change (not direct chats, not carrier groups,
+//     not legacy portals keyed by their participant list);
+//   - which user: the Matrix user of the login the portal belongs to, called
+//     the group manager here;
+//   - how much: groupManagerLevel, one step above the ghosts. Matrix requires
+//     a remover to outrank the removed, so the manager cannot sit at the room
+//     default with them. One step is all it takes, and it is far below
+//     state_default (50) and everything locked at plLockLevel, so the manager
+//     gains invite and kick and nothing else. In such a room invite and kick
+//     need exactly groupManagerLevel and users_default is pinned to 0.
+//
+// resetEscalatedUsers then allows that one user that one level in that room
+// (groupAllowedUserLevel) and still demotes them, with its notice, from
+// anything higher; every other user in every room is treated as before. When
+// a room stops qualifying (the group became a carrier group), invite and kick
+// go back to plLockLevel and syncGroupManagerLevel takes the grant back
+// without a notice, because the bridge gave it.
+
 // groupManagerLevel is the power level of the group manager: one step above
 // the ghosts, which sit at users_default (0).
 const groupManagerLevel = 1
@@ -624,23 +712,52 @@ const groupManagerLevel = 1
 // groupManagerFor returns the Matrix user who may invite and remove ghosts in
 // the portal's room, or "" when nobody may.
 func (c *IMClient) groupManagerFor(portal *bridgev2.Portal) id.UserID {
-	return ""
+	if portal == nil || c.UserLogin == nil || portal.Receiver != c.UserLogin.ID {
+		return ""
+	}
+	portalID := string(portal.ID)
+	if !strings.HasPrefix(portalID, "gid:") || c.isPortalSMS(portalID) {
+		return ""
+	}
+	return c.UserLogin.UserMXID
 }
 
 // groupAllowedUserLevel is the highest power level the bridge lets userID
 // keep in a room whose baseline (users_default) is given.
 func groupAllowedUserLevel(userID, manager id.UserID, baseline int) int {
+	if manager != "" && userID == manager && groupManagerLevel > baseline {
+		return groupManagerLevel
+	}
 	return baseline
 }
 
-// groupMembershipLevels returns the invite and kick power levels of a room.
+// groupMembershipLevels returns the invite and kick power levels of a room:
+// the manager's level where there is a group manager, the lock level elsewhere.
 func groupMembershipLevels(managed bool) (invite, kick int) {
+	if managed {
+		return groupManagerLevel, groupManagerLevel
+	}
 	return plLockLevel, plLockLevel
 }
 
-// syncGroupManagerLevel gives the group manager groupManagerLevel, or takes it
-// away again where there is no manager, and reports whether it changed pl.
+// syncGroupManagerLevel gives the group manager groupManagerLevel, or, where
+// there is no manager, takes that level away from loginUser if they hold
+// exactly it. It reports whether it changed pl. A user above
+// groupManagerLevel is left to resetEscalatedUsers, which demotes with a
+// notice.
 func syncGroupManagerLevel(pl *event.PowerLevelsEventContent, botMXID, loginUser, manager id.UserID) bool {
+	if pl == nil {
+		return false
+	}
+	if manager != "" {
+		if pl.GetUserLevel(manager) < groupManagerLevel {
+			return pl.EnsureUserLevelAs(botMXID, manager, groupManagerLevel)
+		}
+		return false
+	}
+	if loginUser != "" && pl.GetUserLevel(loginUser) == groupManagerLevel && groupManagerLevel > pl.UsersDefault {
+		return pl.EnsureUserLevelAs(botMXID, loginUser, pl.UsersDefault)
+	}
 	return false
 }
 

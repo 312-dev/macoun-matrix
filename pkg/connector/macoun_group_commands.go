@@ -3,12 +3,11 @@
 //
 // macoun: bot commands for iMessage groups.
 //
-// Renaming a group and setting its photo work through the room's own name and
-// avatar (macoun_groups.go). Membership does not: every portal room keeps
-// invite and kick locked for Matrix users (hardenedPowerLevels), so that
-// nobody can pull an unbridged Matrix user into a bridged conversation, and a
-// failed invite cannot be undone on an ordinary homeserver. These commands are
-// the way to change membership from any Matrix client:
+// Renaming a group, setting its photo and adding or removing people all work
+// through the room itself (macoun_groups.go). The commands are the other way
+// to do the membership part, for clients without invite and remove buttons
+// and for typing a phone number instead of finding a ghost, plus the one
+// thing a room cannot do: start a new group.
 //
 //	new-group <identifier> <identifier> [...] [name ...]   anywhere
 //	group-add <identifier>                                 in the group's room
