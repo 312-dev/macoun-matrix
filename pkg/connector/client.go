@@ -6212,8 +6212,13 @@ func (c *IMClient) convertURLPreviewToIMessage(ctx context.Context, content *eve
 		return "\x00RL\x01" + lp.MatchedURL + "\x01" + canonical + "\x01" + lp.Title + "\x01" + lp.Description + "\x00" + body
 	}
 
-	// Priority 2: Auto-detect URL and fetch preview via homeserver or og: scraping
-	if detectedURL := urlRegex.FindString(body); detectedURL != "" && isLikelyURL(detectedURL) {
+	// Priority 2: Auto-detect URL and fetch preview via homeserver or og: scraping.
+	// The envelope is only sent when a preview with a title or description came
+	// back. A rich link with nothing behind it (a file name such as notes.db, or
+	// a host that does not resolve) renders as an empty balloon on the
+	// recipient's device and hides the message text entirely, so anything
+	// without a preview goes out as plain text.
+	if detectedURL := firstLikelyURL(body); detectedURL != "" {
 		fetchURL := normalizeURL(detectedURL)
 		log.Debug().Str("detected_url_host", logSafeURL(detectedURL)).Msg("Auto-detected URL in outbound message, fetching preview")
 		title, desc := "", ""
@@ -6229,17 +6234,36 @@ func (c *IMClient) convertURLPreviewToIMessage(ctx context.Context, content *eve
 		}
 		// Fall back to our own og: scraping if homeserver didn't provide metadata
 		if title == "" && desc == "" {
-			ogData := fetchPageMetadata(ctx, fetchURL)
+			ogData := outboundPageMetadata(ctx, fetchURL)
 			title = ogData["title"]
 			desc = ogData["description"]
 			if title != "" || desc != "" {
 				log.Debug().Bool("has_title", title != "").Bool("has_description", desc != "").Msg("Got URL preview from og: scraping for outbound")
 			}
 		}
+		if title == "" && desc == "" {
+			log.Debug().Str("detected_url_host", logSafeURL(detectedURL)).Msg("No preview for auto-detected URL, sending outbound message as plain text")
+			return body
+		}
 		return "\x00RL\x01" + detectedURL + "\x01" + fetchURL + "\x01" + title + "\x01" + desc + "\x00" + body
 	}
 
 	return body
+}
+
+// outboundPageMetadata is the og: scraper used for outbound previews. Tests
+// replace it to avoid network access.
+var outboundPageMetadata = fetchPageMetadata
+
+// firstLikelyURL returns the first urlRegex match in body that isLikelyURL
+// accepts, so a file name ahead of a real link does not hide the link.
+func firstLikelyURL(body string) string {
+	for _, m := range urlRegex.FindAllString(body, -1) {
+		if isLikelyURL(m) {
+			return m
+		}
+	}
+	return ""
 }
 
 // retrySendOnAPNsFlap retries an APNs-dependent send up to three times across
