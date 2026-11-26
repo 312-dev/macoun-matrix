@@ -85,3 +85,67 @@ func TestMacounIncomingWithoutKnownEffectHasNoKey(t *testing.T) {
 		}
 	}
 }
+
+// The effect on an outbound Matrix message reaches rustpush as the effect
+// envelope ahead of the text; send_message in lib.rs turns it into the
+// message's effect.
+func TestOutboundEffectEnvelope(t *testing.T) {
+	const slam = "com.apple.MobileSMS.expressivesend.impact"
+	got := outboundTextWithEffect(context.Background(), map[string]any{testEffectKey: slam}, false, "hello")
+	if want := "\x00FX\x01" + slam + "\x00hello"; got != want {
+		t.Fatalf("outbound text = %q, want %q", got, want)
+	}
+	// Ahead of a rich-link envelope, which lib.rs parses after it.
+	rl := "\x00RL\x01example.com\x01https://example.com\x01Example\x01\x00example.com"
+	got = outboundTextWithEffect(context.Background(), map[string]any{testEffectKey: slam}, false, rl)
+	if want := "\x00FX\x01" + slam + "\x00" + rl; got != want {
+		t.Fatalf("outbound text = %q, want %q", got, want)
+	}
+}
+
+// Every listed effect id is accepted.
+func TestOutboundEffectAllowlist(t *testing.T) {
+	ids := []string{
+		"com.apple.MobileSMS.expressivesend.impact",
+		"com.apple.MobileSMS.expressivesend.loud",
+		"com.apple.MobileSMS.expressivesend.gentle",
+		"com.apple.MobileSMS.expressivesend.invisibleink",
+		"com.apple.messages.effect.CKEchoEffect",
+		"com.apple.messages.effect.CKSpotlightEffect",
+		"com.apple.messages.effect.CKHappyBirthdayEffect",
+		"com.apple.messages.effect.CKConfettiEffect",
+		"com.apple.messages.effect.CKHeartEffect",
+		"com.apple.messages.effect.CKLasersEffect",
+		"com.apple.messages.effect.CKFireworksEffect",
+		"com.apple.messages.effect.CKSparklesEffect",
+		"com.apple.messages.effect.CKShootingStarEffect",
+	}
+	for _, id := range ids {
+		got := outboundTextWithEffect(context.Background(), map[string]any{testEffectKey: id}, false, "x")
+		if !strings.HasPrefix(got, "\x00FX\x01"+id+"\x00") {
+			t.Errorf("%s was not sent: %q", id, got)
+		}
+	}
+}
+
+// An unknown or malformed effect is not sent, and the text goes out as is.
+// So does any effect on a message to the text-message relay, which has no
+// effects.
+func TestOutboundEffectRefusals(t *testing.T) {
+	for _, raw := range []map[string]any{
+		nil,
+		{},
+		{testEffectKey: ""},
+		{testEffectKey: 7},
+		{testEffectKey: "com.apple.messages.effect.CKMadeUpEffect"},
+		{testEffectKey: "com.apple.messages.effect.CKConfettiEffect\x00x"},
+	} {
+		if got := outboundTextWithEffect(context.Background(), raw, false, "hello"); got != "hello" {
+			t.Errorf("raw %v: outbound text = %q, want plain text", raw, got)
+		}
+	}
+	sms := outboundTextWithEffect(context.Background(), map[string]any{testEffectKey: "com.apple.messages.effect.CKConfettiEffect"}, true, "hello")
+	if sms != "hello" {
+		t.Errorf("SMS outbound text = %q, want plain text", sms)
+	}
+}

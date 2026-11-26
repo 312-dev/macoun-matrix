@@ -43,3 +43,25 @@ fn macoun_provider_outage_mask_tracks_latest_result_per_kind() {
     record_provider_result(PROVIDER_VALIDATION_DATA, true);
     assert_eq!(provider_outage_mask(), 0);
 }
+
+#[test]
+fn macoun_effect_envelope_is_split_off() {
+    use crate::split_effect_envelope;
+    let (effect, rest) = split_effect_envelope("\u{0}FX\u{1}com.apple.messages.effect.CKConfettiEffect\u{0}hello".to_string());
+    assert_eq!(effect.as_deref(), Some("com.apple.messages.effect.CKConfettiEffect"));
+    assert_eq!(rest, "hello");
+    // A rich-link envelope after it is left for the rich-link parser.
+    let (effect, rest) = split_effect_envelope("\u{0}FX\u{1}com.apple.MobileSMS.expressivesend.impact\u{0}\u{0}RL\u{1}a\u{1}b\u{1}c\u{1}\u{0}body".to_string());
+    assert_eq!(effect.as_deref(), Some("com.apple.MobileSMS.expressivesend.impact"));
+    assert_eq!(rest, "\u{0}RL\u{1}a\u{1}b\u{1}c\u{1}\u{0}body");
+}
+
+#[test]
+fn macoun_effect_envelope_absent_or_malformed() {
+    use crate::split_effect_envelope;
+    for text in ["hello", "\u{0}FX\u{1}no terminator", "\u{0}FX\u{1}\u{0}empty id", "\u{0}RL\u{1}a\u{0}b"] {
+        let (effect, rest) = split_effect_envelope(text.to_string());
+        assert_eq!(effect, None, "{text:?}");
+        assert_eq!(rest, text);
+    }
+}
