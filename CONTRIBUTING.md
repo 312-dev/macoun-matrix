@@ -30,6 +30,9 @@ Security problems go through [SECURITY.md](SECURITY.md), not the issue tracker.
 - `scripts/macoun-build-linux.sh test` (inside the build image, see
   [docs/setup.md](docs/setup.md)) runs the macoun tests. CI runs the same
   script.
+- CI also runs `golangci-lint` ([.golangci.yml](.golangci.yml)) and
+  `go mod tidy -diff`. Lint only reports code changed since v0.1.0, so a
+  corten-matrix file you touch is checked on your lines, not as a whole.
 
 Nothing in the test suite talks to Apple. If your change affects what is sent
 to Apple, say in the pull request how you checked it against a real account.

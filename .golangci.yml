@@ -1,0 +1,17 @@
+version: "2"
+
+# CI passes --new-from-rev=v0.1.0, so only code written after the first
+# release is checked. The code inherited from the corten-matrix snapshot is
+# left as it was, which keeps the diff against the snapshot readable.
+linters:
+  default: standard
+  settings:
+    staticcheck:
+      # golangci-lint's default set, plus QF1008 off: the connector spells
+      # out embedded fields (attMsg.WrappedMessage.ReplyGuid) on purpose.
+      checks: ["all", "-ST1000", "-ST1003", "-ST1016", "-ST1020", "-ST1021", "-ST1022", "-QF1008"]
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

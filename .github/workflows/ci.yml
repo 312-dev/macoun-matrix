@@ -28,6 +28,26 @@ jobs:
       - run: go vet ./imessage/... ./ipc/... ./pkg/bbctl/... ./pkg/dbowner/...
       - run: go test ./imessage/... ./ipc/... ./pkg/bbctl/... ./pkg/dbowner/...
 
+  lint:
+    name: Lint (code since v0.1.0)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # --new-from-rev needs the v0.1.0 tag and the history after it.
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      # Headers only: type-checking the cgo packages needs olm.h and heif.h
+      # (rustpushgo.h is in the tree), not the built Rust library.
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libolm-dev libheif-dev
+      - run: go mod tidy -diff
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.15.0
+          args: --new-from-rev=v0.1.0
+
   relay:
     name: Relay and extract-key build (macOS)
     runs-on: macos-15
