@@ -120,7 +120,7 @@ func runSyncStatus(args []string) {
 		die("Could not read sync status from %s: %v", cfg.Database.URI, err)
 	}
 
-	fmt.Printf("\n  %scorten-matrix sync-status%s%s\n  %s%s%s\n\n",
+	fmt.Printf("\n  %smacoun-matrix sync-status%s%s\n  %s%s%s\n\n",
 		cBold+cAccent, cReset, who, cDim, configPath, cReset)
 	fmt.Println(report.Format())
 }

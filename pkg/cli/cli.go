@@ -124,7 +124,7 @@ func exitWith(name string, args ...string) {
 		if ee, ok := err.(*exec.ExitError); ok {
 			os.Exit(ee.ExitCode())
 		}
-		fmt.Fprintf(os.Stderr, "corten-matrix: %s: %v\n", name, err)
+		fmt.Fprintf(os.Stderr, "macoun-matrix: %s: %v\n", name, err)
 		os.Exit(1)
 	}
 	os.Exit(0)
@@ -135,17 +135,17 @@ func exitWith(name string, args ...string) {
 func runEmbeddedScript(name string, args ...string) {
 	data, err := scripts.Files.ReadFile(name)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "corten-matrix: embedded script %q missing: %v\n", name, err)
+		fmt.Fprintf(os.Stderr, "macoun-matrix: embedded script %q missing: %v\n", name, err)
 		os.Exit(1)
 	}
 	tmp, err := os.CreateTemp("", "corten-*.sh")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "corten-matrix: %v\n", err)
+		fmt.Fprintf(os.Stderr, "macoun-matrix: %v\n", err)
 		os.Exit(1)
 	}
 	defer os.Remove(tmp.Name())
 	if _, err := tmp.Write(data); err != nil {
-		fmt.Fprintf(os.Stderr, "corten-matrix: %v\n", err)
+		fmt.Fprintf(os.Stderr, "macoun-matrix: %v\n", err)
 		os.Exit(1)
 	}
 	tmp.Close()
@@ -557,17 +557,17 @@ func startAfterSetup() {
 		fmt.Scanln(&ans)
 		switch ans {
 		case "n", "N", "no", "No":
-			fmt.Printf("\n%s✓%s Installed. Start any time with: corten-matrix start\n", cGreen, cReset)
+			fmt.Printf("\n%s✓%s Installed. Start any time with: macoun-matrix start\n", cGreen, cReset)
 			return
 		}
 	}
 	// one service runs every configured account (bridge-all)
 	if err := startOneNow(0); err != nil {
 		fmt.Printf("\n%s!%s Service installed, but starting it failed: %v\n", cRed, cReset, err)
-		fmt.Println("  Try: corten-matrix start   (then: corten-matrix status)")
+		fmt.Println("  Try: macoun-matrix start   (then: macoun-matrix status)")
 		return
 	}
-	fmt.Printf("\n%s✓%s Bridge started — view logs with: corten-matrix logs\n", cGreen, cReset)
+	fmt.Printf("\n%s✓%s Bridge started — view logs with: macoun-matrix logs\n", cGreen, cReset)
 }
 
 // RunAllBridges is the ExecStart of the ONE service: it runs every configured
@@ -589,7 +589,7 @@ func RunAllBridges() {
 		go superviseAccount(self, i, d)
 	}
 	if started == 0 {
-		fmt.Fprintln(os.Stderr, "corten-matrix: no configured account to run (run setup first)")
+		fmt.Fprintln(os.Stderr, "macoun-matrix: no configured account to run (run setup first)")
 		os.Exit(1)
 	}
 	// Supervisors never return. systemd's Restart=always now only fires if
@@ -615,7 +615,7 @@ func superviseAccount(self string, i int, d string) {
 	for {
 		c := accountCmd(self, i, d)
 		if err := c.Start(); err != nil {
-			fmt.Fprintf(os.Stderr, "corten-matrix: account %d (%s): start failed: %v; retrying in %s\n",
+			fmt.Fprintf(os.Stderr, "macoun-matrix: account %d (%s): start failed: %v; retrying in %s\n",
 				i, d, err, restartDelay)
 			time.Sleep(restartDelay)
 			continue
@@ -629,7 +629,7 @@ func superviseAccount(self string, i int, d string) {
 		// not the per-account bridge.stdout.log the child is redirected into.
 		// `journalctl --user -u corten-matrix.service` is where someone
 		// watching a restart loop looks first.
-		fmt.Fprintf(os.Stderr, "corten-matrix: account %d (%s) %s; restarting it in %s\n",
+		fmt.Fprintf(os.Stderr, "macoun-matrix: account %d (%s) %s; restarting it in %s\n",
 			i, d, state, restartDelay)
 		time.Sleep(restartDelay)
 	}
@@ -980,7 +980,7 @@ func serviceInstall() {
 		fmt.Println("  and the two would knock each other off Beeper. The service was not changed.")
 		fmt.Println()
 		if os.Getenv("SUDO_USER") != "" {
-			fmt.Println("  To keep the user service, manage it without sudo: corten-matrix start | stop | restart")
+			fmt.Println("  To keep the user service, manage it without sudo: macoun-matrix start | stop | restart")
 		}
 		fmt.Println("  To switch to a system service, remove the user one first, as that user:")
 		fmt.Printf("    systemctl --user disable --now corten-matrix.service; rm -f %s\n", userUnit)
@@ -1038,8 +1038,8 @@ func serviceInstall() {
 		fmt.Println("  Replacing a unit this command did not author has broken working installs before,")
 		fmt.Println("  so it refuses rather than guess.")
 		fmt.Println()
-		fmt.Println("  To manage the existing service: corten-matrix start | stop | restart | status")
-		fmt.Println("  To replace it deliberately:      corten-matrix uninstall-service && corten-matrix install-service")
+		fmt.Println("  To manage the existing service: macoun-matrix start | stop | restart | status")
+		fmt.Println("  To replace it deliberately:      macoun-matrix uninstall-service && macoun-matrix install-service")
 		os.Exit(1)
 	}
 	if !exists {
@@ -1259,10 +1259,10 @@ var ExtraHelpRows [][2]string
 
 // printHelp shows the user-facing command list (clean, accent-colored).
 func PrintHelp() {
-	hdr := cBold + cAccent + "◆ corten-matrix" + cReset
+	hdr := cBold + cAccent + "◆ macoun-matrix" + cReset
 	fmt.Println()
-	fmt.Printf("  %s  %sMatrix ↔ iMessage bridge%s\n\n", hdr, cDim, cReset)
-	fmt.Printf("  %sUsage:%s corten-matrix <command>\n\n", cDim, cReset)
+	fmt.Printf("  %s  %sMatrix ↔ iMessage bridge (a fork of corten-matrix)%s\n\n", hdr, cDim, cReset)
+	fmt.Printf("  %sUsage:%s macoun-matrix <command>\n\n", cDim, cReset)
 	rows := [][2]string{
 		{"setup", "configure & start (re-run to flip a toggle, e.g. backfill)"},
 		{"setup-beeper", "configure for Beeper (re-run to reconfigure)"},

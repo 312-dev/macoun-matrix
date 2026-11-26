@@ -63,6 +63,8 @@ func init() {
 			proc.AddHandler(h)
 		}
 		raiseMatrixHTTPTimeout()
+		m.Log.Info().Str("version", Tag).Str("commit", Commit).
+			Msg(productName + " starting (a fork of " + upstreamName + ")") // macoun banner
 	}
 }
 
@@ -82,6 +84,9 @@ func main() {
 		switch os.Args[1] {
 		case "help", "-h", "--help":
 			cli.PrintHelp()
+			return
+		case "-v", "--version":
+			fmt.Println(macounVersionLine()) // macoun: see macoun_identity.go
 			return
 		case "fda-check":
 			// Probe chat.db as our OWN TCC "responsible" process (via a transient
