@@ -197,12 +197,39 @@ no new login is needed. Work on a **copy** first.
    `macoun_recycle_bin_*` tables and the key files `macoun-limiter.key` and
    `macoun-attachment-index.key`; corten-matrix 1.3.x does not use any of them, so a rollback is
    unaffected. It leaves session.json's `ids_key_cache` untouched. macoun also
-   writes `macoun_rehydrate_empty:<portal>` rows into the existing
-   `cloud_maintenance` table, which corten-matrix 1.3.x does not read.
+   writes `macoun_rehydrate_empty:<portal>` and `macoun_local_delete:<portal>`
+   rows into the existing `cloud_maintenance` table, which corten-matrix 1.3.x does not
+   read.
 
 ## 7. Monitoring
 
-`examples/monitoring/` has a probe script and systemd timers:
+### In Matrix
+
+The bridge reports an outage of the Mac relay (or whichever provider serves
+validation data and anisette) as a bridge state. With `bridge_status_notices:
+errors` (or `all`) in `config.yaml`, the bridge bot posts it in your management
+room:
+
+- when a validation-data or anisette call has failed after its retries: one
+  notice, `CONNECTED` with error `macoun-provider-unreachable`, saying which
+  kind of call failed and that messaging continues. Further failed calls in
+  the same outage post nothing.
+- when a later call succeeds: one `CONNECTED` notice saying the relay answers
+  again.
+
+The login stays `CONNECTED` throughout, because sending and receiving do not
+depend on the relay; clients do not show the account as disconnected. The
+bridge only talks to the relay when it needs something (see "When the Mac must
+be reachable" in [overview.md](overview.md)), so an outage is noticed at the
+next such call, and so is its end. The check runs every 30 seconds.
+
+With `bridge_status_notices: none` nothing is posted; the log lines below
+still appear.
+
+### Outside the bridge
+
+A bridge that is down cannot report anything, so an external watchdog is still
+worth having. `examples/monitoring/` has a probe script and systemd timers:
 
 - every 5 minutes, `GET /health` with the public key pinned; alert after 15
   minutes of failure, repeat every 6 hours, note recovery and macOS build

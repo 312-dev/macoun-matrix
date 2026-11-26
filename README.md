@@ -260,6 +260,7 @@ To abort an interactive command (a picker waiting for your reply), type `cancel`
 | `start-chat` | Open a new iMessage DM. With no arguments, the bot walks you through phone vs. email and explains the country-code format. With an argument (`start-chat +15551234567` or `start-chat someone@icloud.com`) it skips the picker. |
 | `contacts` | Search your synced contacts by name (iCloud, external CardDAV, or local macOS Contacts depending on `backfill_source` and `carddav` settings) and reply with a number to open a chat. Different from `start-chat` — use this when you don't remember the number/email. Alias: `find`. |
 | `restore-chat` | List iMessage chats in the recycle bin. Reply with a number to bring one back, including its history. |
+| `delete-portal` | Admin only, run inside a bridged chat: delete that room and keep it deleted across restarts. Nothing is deleted on Apple's side; a new message in the chat or `restore-chat` brings it back. |
 | `logout` | Sign out of iMessage. Lists active handles, you reply with a number (or `all`). The bot then walks you through the manual step at `appleid.apple.com → Devices` to fully revoke the bridge from Apple's servers. |
 | `help` | Full command list, grouped by section. |
 
@@ -627,6 +628,8 @@ pkg/connector/                              # bridgev2 connector — the main Go
   ├── macoun_recycle_bin.go                 #   local copy of the CloudKit recycle bin, read incrementally
   ├── macoun_attachment_index.go            #   encrypted index of the CloudKit attachment zone
   ├── macoun_startup_hold.go                #   which incoming messages wait for the startup pass
+  ├── macoun_provider_status.go             #   Mac relay outage and recovery as bridge states
+  ├── macoun_delete_portal.go               #   delete-portal that records the deletion
   ├── heic.go                               #   HEIC → JPEG conversion (libheif)
   ├── audioconvert.go                       #   audio remux to M4A / CAF
   ├── urlpreview.go                         #   OpenGraph / Twitter Card URL-preview extractor
