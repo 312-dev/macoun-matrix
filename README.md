@@ -1,37 +1,30 @@
 # macoun-matrix
 
-**macoun-matrix is a fork of corten-matrix** (below), built from the
-public MPL-2.0 source for Linux amd64 without corten-matrix's closed parts.
-Provenance and licences are in [NOTICE.md](NOTICE.md). Everything after this section is the
-upstream corten-matrix README, kept unchanged; where it says building from
-source is unsupported, that is upstream's position.
+**macoun-matrix is a fork of corten-matrix** (below) that builds a Linux
+Matrix to iMessage bridge entirely from open-licensed source. A Mac you own
+runs `tools/macoun-relay` and supplies the two things Apple requires from a
+real Mac: NAC validation data and anisette headers, over an authenticated HTTPS
+relay (Tailscale recommended). No closed or PolyForm code is included.
 
-What differs from upstream:
+| Read | For |
+|---|---|
+| [docs/overview.md](docs/overview.md) | What it is, why, licences, architecture, when the Mac must be reachable |
+| [docs/requirements.md](docs/requirements.md) | Mac, Linux host and network requirements |
+| [docs/setup.md](docs/setup.md) | Step by step: relay, hardware key, build, config, migrating a 1.3.x login, monitoring, upgrades, troubleshooting |
+| [docs/provider-contract.md](docs/provider-contract.md) | The HTTP contract, to plug in your own validation-data or anisette provider |
+| [NOTICE.md](NOTICE.md) | File-level provenance and licences (MPL-2.0 base, AGPL-3.0 relay code, SSPL rustpush) |
 
-- **NAC validation data comes from a Mac** running `tools/nac-relay`
-  (corten-matrix's relay-era relay, AGPL-3.0). The hardware key carries
-  `nac_relay_url` / `relay_token` / `relay_cert_fp` (written by
-  `tools/extract-key -relay ...`), or set `MACOUN_NAC_RELAY_URL`,
-  `MACOUN_NAC_RELAY_TOKEN` and `MACOUN_NAC_RELAY_CERT_FP` (SHA-256 hex of the
-  relay's DER certificate) to point an existing login at a relay.
-- **Anisette comes from the same Mac relay** (`GET /anisette`, a JSON map of
-  headers the Mac produces with AOSKit), using the relay URL, token and pinned
-  certificate above. The Mac-side endpoint is not written yet. An anisette v3
-  server can be named with `MACOUN_ANISETTE_URL` (https only), but Apple has
-  refused Android-ADI OTPs for a Mac identity since about 2026-10-12, so no
-  public v3 server works. With neither configured, anisette fails with an
-  error; there is no fallback to a public server.
-- **Outbound limiter** in `pkg/connector/idskeys.go` instead of the closed
-  one; `MACOUN_OUTBOUND_LIMIT=off` disables it.
-- **No self-update** (`pkg/connector/hostcmd.go` is the public stub).
-- Outbound text with no real link preview is sent as plain text (the
-  "vanishing message" fix that upstream shipped in 2.0.5).
+Differences from upstream: NAC and anisette from the relay (no public anisette
+fallback), an open outbound limiter in place of the closed one, no
+self-update, tolerance of a briefly unreachable Mac (early IDS
+re-registration, capped retry backoff, message flow while CloudKit bootstrap
+retries), and the 2.0.5 "vanishing message" fix. The Go module path, the
+`cmd/corten-matrix` package and the `corten-matrix` state directory keep their
+upstream names.
 
-Build (Linux amd64, Docker): build `docker/Dockerfile.build`, then run
-`scripts/macoun-build-linux.sh` in it with this repository at `/src` and an
-OpenBubbles/rustpush checkout at the pinned SHA, with submodules, at
-`/rustpush`. The binary is `./macoun-matrix`. The Go module path and the
-`cmd/corten-matrix` package keep their upstream names.
+Everything after this section is the upstream corten-matrix README, kept
+unchanged; where it says building from source is unsupported, that is
+upstream's position.
 
 ---
 

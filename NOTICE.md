@@ -11,7 +11,9 @@ supported by the Corten-Matrix Project.
 |---|---|---|
 | Everything not listed below | corten-matrix MPL-2.0 source archive "as it stood on November 1, 2026", `https://corten-matrix.com/assets/corten-matrix-mpl-2.0-2026-11-01.tar.gz`, sha256 `761d3713c925ad8c9cfb695c43e397b3bdb1b29ef75efe71a46892a146206d03`. Imported unchanged as the first commit of this repository. | MPL-2.0 (`LICENSE`). File headers are kept. |
 | `pkg/rustpushgo/src/nac_relay.rs` | `RelayOSConfig` from corten-matrix commit `e2adc79d92f4b91fb0ef8bf16439c4411ffbb165` (2026-06-21), adapted; the relay anisette client in the same file is new | AGPL-3.0 (`LICENSES/AGPL-3.0.txt`) |
-| `tools/nac-relay/` | corten-matrix `e2adc79d92`, `tools/nac-relay/{main,auth}.go`; header and `darwin` build constraint added | AGPL-3.0 |
+| `tools/macoun-relay/` | Imported with history (`git subtree`) from the macoun-relay repository: `e176a98` is corten-matrix `e2adc79d92` `tools/nac-relay` and `nac-validation` verbatim; `03a5609` adds `/anisette` (AOSKit), JSON `/health`, a capped log and removes token logging. `launchd/` template is new. | AGPL-3.0 (its own `LICENSE`) |
+| `examples/monitoring/` | Written for macoun-matrix | MPL-2.0 |
+| `docs/` | Written for macoun-matrix | MPL-2.0 |
 | `tools/extract-key/` | corten-matrix `e2adc79d92`, `tools/extract-key/`; header added | AGPL-3.0 |
 | `third_party/patches/apple-private-apis/fallible-gsa-token-header-parsing.patch` | corten-matrix commit `64f9d73` (the public tree matching the 1.3.2 release) | MPL-2.0 |
 | `scripts/macoun-prepare-rustpush.sh` | The patch set is taken from the `ensure-rustpush-source` target of corten-matrix `64f9d73`'s Makefile, plus one macoun-matrix patch (`pub mod activation`) | MPL-2.0 |

@@ -4997,7 +4997,7 @@ fn _create_config_from_hardware_key_inner(base64_key: String, device_id: Option<
     });
 
     // With a NAC relay configured (in the key or through MACOUN_NAC_RELAY_*),
-    // validation data comes from the Mac running tools/nac-relay; see
+    // validation data comes from that provider (the Mac running tools/macoun-relay); see
     // nac_relay.rs. Without one, MacOSConfig's own NAC path is used, which in a
     // Linux build without native NAC fails at registration.
     let config: Arc<dyn OSConfig> = match nac_relay::resolve(

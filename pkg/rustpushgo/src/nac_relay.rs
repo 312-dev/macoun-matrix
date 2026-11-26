@@ -12,7 +12,7 @@
 // ignored, `get_adi_mme_info` is delegated as well, and the same relay also
 // serves anisette headers (`fetch_anisette_headers`).
 //
-// Protocol (tools/nac-relay at e2adc79d92, running on the Mac):
+// Protocol (tools/macoun-relay, from corten-matrix e2adc79d92 tools/nac-relay):
 //   POST <url>/validation-data, `Authorization: Bearer <token>`
 //     -> 200, text/plain body = base64 of the complete validation data
 //   GET  <url>/health -> "ok" (no auth)
