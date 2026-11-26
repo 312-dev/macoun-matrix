@@ -14,10 +14,13 @@ What differs from upstream:
   `tools/extract-key -relay ...`), or set `MACOUN_NAC_RELAY_URL`,
   `MACOUN_NAC_RELAY_TOKEN` and `MACOUN_NAC_RELAY_CERT_FP` (SHA-256 hex of the
   relay's DER certificate) to point an existing login at a relay.
-- **Anisette comes from an anisette v3 server** (rustpush's open
-  `remote-anisette-v3` client). Set `MACOUN_ANISETTE_URL` to a self-hosted
-  [anisette-v3-server](https://github.com/Dadoum/anisette-v3-server); unset, it
-  falls back to SideStore's public `https://ani.sidestore.io`.
+- **Anisette comes from the same Mac relay** (`GET /anisette`, a JSON map of
+  headers the Mac produces with AOSKit), using the relay URL, token and pinned
+  certificate above. The Mac-side endpoint is not written yet. An anisette v3
+  server can be named with `MACOUN_ANISETTE_URL` (https only), but Apple has
+  refused Android-ADI OTPs for a Mac identity since about 2026-10-12, so no
+  public v3 server works. With neither configured, anisette fails with an
+  error; there is no fallback to a public server.
 - **Outbound limiter** in `pkg/connector/idskeys.go` instead of the closed
   one; `MACOUN_OUTBOUND_LIMIT=off` disables it.
 - **No self-update** (`pkg/connector/hostcmd.go` is the public stub).

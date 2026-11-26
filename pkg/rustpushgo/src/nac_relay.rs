@@ -7,12 +7,15 @@
 // Public License v3. This file stays under AGPL-3.0; see NOTICE.md. macoun-matrix
 // changes: the relay settings can come from the environment, the TLS
 // certificate fingerprint carried in the hardware key is enforced rather than
-// ignored, and `get_adi_mme_info` is delegated as well.
+// ignored, `get_adi_mme_info` is delegated as well, and the same relay also
+// serves anisette headers (`fetch_anisette_headers`).
 //
 // Protocol (tools/nac-relay at e2adc79d92, running on the Mac):
 //   POST <url>/validation-data, `Authorization: Bearer <token>`
 //     -> 200, text/plain body = base64 of the complete validation data
 //   GET  <url>/health -> "ok" (no auth)
+//   GET  <url>/anisette, same auth (macoun-matrix addition, see
+//     fetch_anisette_headers) -> 200, JSON object of anisette headers
 // The Mac runs the whole NAC init / Apple initializeValidation / sign sequence
 // through AAAbsintheContext, so no NAC code runs on Linux at all.
 
@@ -90,6 +93,89 @@ fn check_pin(resp: &reqwest::Response, want: &Option<String>) -> Result<(), Push
     }
 }
 
+impl RelaySettings {
+    /// The relay's base URL, without the `/validation-data` endpoint.
+    pub fn base_url(&self) -> &str {
+        self.url.trim_end_matches("/validation-data")
+    }
+}
+
+/// Build a client for the relay and, when a fingerprint is pinned, check it on
+/// an unauthenticated `/health` request first, so the bearer token is never
+/// sent to a server that fails the pin. Every later response is checked again.
+/// The relay uses a self-signed certificate, so chain validation is off; the
+/// pin is what authenticates the server.
+async fn relay_client(relay: &RelaySettings) -> Result<reqwest::Client, PushError> {
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .tls_info(true)
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| PushError::RelayError(0, format!("Failed to build relay client: {e}")))?;
+    if relay.cert_fp.is_some() {
+        let health = format!("{}/health", relay.base_url());
+        let resp = client.get(&health).send().await
+            .map_err(|e| PushError::RelayError(0, format!("NAC relay health check failed: {e}")))?;
+        check_pin(&resp, &relay.cert_fp)?;
+    }
+    Ok(client)
+}
+
+// The relay this process registered with, set when a hardware-key config with
+// a relay is built. The anisette provider (anisette.rs) reads it, because
+// rustpush constructs anisette providers without access to the OSConfig.
+static ACTIVE: std::sync::RwLock<Option<RelaySettings>> = std::sync::RwLock::new(None);
+
+pub fn set_active(relay: &RelaySettings) {
+    if let Ok(mut a) = ACTIVE.write() {
+        *a = Some(relay.clone());
+    }
+}
+
+/// The registered relay, or one configured only through MACOUN_NAC_RELAY_*.
+pub fn active() -> Option<RelaySettings> {
+    ACTIVE.read().ok().and_then(|a| a.clone()).or_else(|| resolve(None, None, None))
+}
+
+/// Anisette headers from the relay's `GET /anisette` endpoint (macoun-matrix
+/// extension of the relay protocol): a JSON object of header name to value,
+/// produced on the Mac by AOSKit (`AOSUtilities retrieveOTPHeadersForDSID:`
+/// plus the `AKDevice` fields, as omnisette's aos_kit.rs does on macOS). The
+/// OTP then comes from the same real Mac as the hardware key's identity.
+pub async fn fetch_anisette_headers(relay: &RelaySettings) -> Result<HashMap<String, String>, PushError> {
+    let client = relay_client(relay).await?;
+    let url = format!("{}/anisette", relay.base_url());
+    let mut req = client.get(&url);
+    if let Some(ref token) = relay.token {
+        req = req.header("Authorization", format!("Bearer {token}"));
+    }
+    let resp = req.send().await
+        .map_err(|e| PushError::RelayError(0, format!("anisette relay request failed: {e}")))?;
+    check_pin(&resp, &relay.cert_fp)?;
+    if !resp.status().is_success() {
+        let status = resp.status().as_u16();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(PushError::RelayError(status, format!("anisette relay error: {body}")));
+    }
+    let body = resp.text().await
+        .map_err(|e| PushError::RelayError(0, format!("anisette relay read error: {e}")))?;
+    parse_anisette_headers(&body)
+}
+
+/// Parse and sanity-check the relay's header map. X-Apple-I-MD (the OTP) and
+/// X-Apple-I-MD-M (the machine id) are required; without them every
+/// GrandSlam call would fail later with a less obvious error.
+pub fn parse_anisette_headers(body: &str) -> Result<HashMap<String, String>, PushError> {
+    let headers: HashMap<String, String> = serde_json::from_str(body)
+        .map_err(|e| PushError::RelayError(0, format!("anisette relay returned invalid JSON: {e}")))?;
+    for required in ["X-Apple-I-MD", "X-Apple-I-MD-M"] {
+        if headers.get(required).map_or(true, |v| v.is_empty()) {
+            return Err(PushError::RelayError(0, format!("anisette relay response lacks {required}")));
+        }
+    }
+    Ok(headers)
+}
+
 /// Wraps the hardware-key `MacOSConfig`; only `generate_validation_data` is
 /// replaced, every other method delegates unchanged.
 pub struct RelayOSConfig {
@@ -105,6 +191,7 @@ impl RelayOSConfig {
         if relay.token.is_none() {
             warn!("NAC relay at {} has no bearer token", relay.url);
         }
+        set_active(&relay);
         Self { inner, relay }
     }
 }
@@ -120,21 +207,7 @@ impl OSConfig for RelayOSConfig {
 
         // The relay uses a self-signed certificate, so chain validation is
         // off; the fingerprint pin below is what authenticates the server.
-        let client = reqwest::Client::builder()
-            .danger_accept_invalid_certs(true)
-            .tls_info(true)
-            .timeout(std::time::Duration::from_secs(60))
-            .build()
-            .map_err(|e| PushError::RelayError(0, format!("Failed to build relay client: {e}")))?;
-
-        // Verify the pin on an unauthenticated request first, so the bearer
-        // token is not sent to a server that fails it.
-        if self.relay.cert_fp.is_some() {
-            let health = self.relay.url.trim_end_matches("/validation-data").to_string() + "/health";
-            let resp = client.get(&health).send().await
-                .map_err(|e| PushError::RelayError(0, format!("NAC relay health check failed: {e}")))?;
-            check_pin(&resp, &self.relay.cert_fp)?;
-        }
+        let client = relay_client(&self.relay).await?;
 
         let mut req = client.post(&self.relay.url);
         if let Some(ref token) = self.relay.token {
@@ -186,6 +259,21 @@ mod tests {
         assert_eq!(s.cert_fp.as_deref(), Some("abcdef"));
         let s = resolve(Some("https://h:5001/validation-data".into()), None, None).unwrap();
         assert_eq!(s.url, "https://h:5001/validation-data");
+    }
+
+    #[test]
+    fn base_url_strips_endpoint() {
+        let s = resolve(Some("https://h:5001".into()), None, None).unwrap();
+        assert_eq!(s.base_url(), "https://h:5001");
+    }
+
+    #[test]
+    fn anisette_headers_require_otp_and_machine_id() {
+        let ok = parse_anisette_headers(r#"{"X-Apple-I-MD":"otp","X-Apple-I-MD-M":"mid","X-Mme-Device-Id":"d"}"#).unwrap();
+        assert_eq!(ok.get("X-Apple-I-MD-M").map(String::as_str), Some("mid"));
+        assert!(parse_anisette_headers(r#"{"X-Apple-I-MD":"otp"}"#).is_err());
+        assert!(parse_anisette_headers(r#"{"X-Apple-I-MD":"","X-Apple-I-MD-M":"m"}"#).is_err());
+        assert!(parse_anisette_headers("not json").is_err());
     }
 
     #[test]

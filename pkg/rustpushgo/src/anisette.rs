@@ -1,9 +1,11 @@
-//! Legacy Linux anisette wrapper around `RemoteAnisetteProviderV3`.
+//! Linux anisette provider: the Mac relay's `GET /anisette`, or
+//! `RemoteAnisetteProviderV3` (see `AnisetteSource` for the order).
 //!
 //! This module is compiled only with rustpushgo's `anisette-remote-v3` feature.
 //! The upstream release Linux build uses the closed clean-room `ClearADIClient`
 //! instead; macoun-matrix builds Linux with this module, because that client
-//! is not in the public source.
+//! is not in the public source. The timeout, retry and panic guards below
+//! cover both sources.
 //!
 //! The `RemoteAnisetteProviderV3` provisioning has three bugs we work around here:
 //!   1. The `ProvisionInput` enum is missing `EndProvisioningError`, so a
@@ -45,21 +47,60 @@ use log::{error, info, warn};
 use omnisette::remote_anisette_v3::RemoteAnisetteProviderV3;
 use omnisette::{AnisetteError, AnisetteProvider, LoginClientInfo};
 
-/// Anisette v3 server used when MACOUN_ANISETTE_URL is unset: SideStore's
-/// public instance. Set MACOUN_ANISETTE_URL to a self-hosted
-/// anisette-v3-server to keep the provisioning traffic off third parties.
-const DEFAULT_ANISETTE_URL: &str = "https://ani.sidestore.io";
 const ANISETTE_URL_ENV: &str = "MACOUN_ANISETTE_URL";
 
-fn anisette_url() -> String {
-    match std::env::var(ANISETTE_URL_ENV) {
-        Ok(v) if !v.trim().is_empty() => v.trim().trim_end_matches('/').to_string(),
-        _ => {
-            static WARNED: std::sync::Once = std::sync::Once::new();
-            WARNED.call_once(|| warn!("anisette: {} is unset, using the public server {}", ANISETTE_URL_ENV, DEFAULT_ANISETTE_URL));
-            DEFAULT_ANISETTE_URL.to_string()
-        }
+/// Where anisette headers come from, in order of preference:
+///
+/// 1. The Mac relay (nac_relay.rs), when the hardware key or MACOUN_NAC_RELAY_*
+///    names one: the Mac's own AOSKit produces the headers over `GET /anisette`.
+///    This is the only source that works for a Mac identity since Apple began
+///    rejecting Android-ADI OTPs (about 2026-10-12, error -29003).
+/// 2. An anisette v3 server named by MACOUN_ANISETTE_URL, through upstream's
+///    `RemoteAnisetteProviderV3`. Kept for completeness; every public v3 server
+///    runs Android ADI and is currently refused by Apple.
+///
+/// With neither configured there is deliberately no fallback to a public
+/// server: the call fails and says what to set.
+#[derive(Clone)]
+enum AnisetteSource {
+    #[cfg(feature = "hardware-key")]
+    Relay(crate::nac_relay::RelaySettings),
+    V3(String),
+}
+
+fn anisette_source() -> Result<AnisetteSource, AnisetteError> {
+    #[cfg(feature = "hardware-key")]
+    if let Some(relay) = crate::nac_relay::active() {
+        return Ok(AnisetteSource::Relay(relay));
     }
+    match std::env::var(ANISETTE_URL_ENV) {
+        Ok(v) if !v.trim().is_empty() => {
+            let url = v.trim().trim_end_matches('/').to_string();
+            // RemoteAnisetteProviderV3 derives its provisioning websocket URL
+            // with .replace("https://", "wss://") only, so an http:// URL stays
+            // http:// and tungstenite rejects it with UnsupportedUrlScheme on
+            // first provisioning. Refuse it up front. The websocket also checks
+            // webpki roots, so the https certificate must be publicly trusted.
+            if !url.starts_with("https://") {
+                return Err(AnisetteError::InvalidArgument(format!(
+                    "{ANISETTE_URL_ENV}={url} must be an https:// URL with a publicly trusted certificate \
+                     (the v3 provisioning websocket maps only https:// to wss://)"
+                )));
+            }
+            Ok(AnisetteSource::V3(url))
+        }
+        _ => Err(AnisetteError::InvalidArgument(format!(
+            "no anisette source configured: give the hardware key a NAC relay (or set \
+             MACOUN_NAC_RELAY_URL) so the Mac relay serves anisette, or set {ANISETTE_URL_ENV}"
+        ))),
+    }
+}
+
+#[cfg(feature = "hardware-key")]
+async fn relay_headers(relay: crate::nac_relay::RelaySettings) -> Result<HashMap<String, String>, AnisetteError> {
+    crate::nac_relay::fetch_anisette_headers(&relay)
+        .await
+        .map_err(|e| AnisetteError::InvalidArgument(format!("anisette from the Mac relay failed: {e}")))
 }
 const PROVISION_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_RETRIES: usize = 3;
@@ -83,6 +124,10 @@ impl AnisetteProvider for BridgeAnisetteProvider {
         async move {
             let mut last_err = None;
             let call_start = std::time::Instant::now();
+            let source = anisette_source().map_err(|e| {
+                error!("anisette: {}", e);
+                e
+            })?;
 
             for attempt in 0..MAX_RETRIES {
                 let attempt_start = std::time::Instant::now();
@@ -93,19 +138,27 @@ impl AnisetteProvider for BridgeAnisetteProvider {
                     call_start.elapsed()
                 );
 
-                // Fresh provider each attempt — it reads state from disk so a
-                // cleared state.plist forces re-provisioning.
-                let mut upstream = RemoteAnisetteProviderV3::new(
-                    anisette_url(),
-                    self.info.clone(),
-                    self.state_path.clone(),
-                );
+                let fetch: futures::future::BoxFuture<'static, Result<HashMap<String, String>, AnisetteError>> =
+                    match source.clone() {
+                        #[cfg(feature = "hardware-key")]
+                        AnisetteSource::Relay(relay) => relay_headers(relay).boxed(),
+                        AnisetteSource::V3(url) => {
+                            // Fresh provider each attempt — it reads state from disk so a
+                            // cleared state.plist forces re-provisioning.
+                            let mut upstream = RemoteAnisetteProviderV3::new(
+                                url,
+                                self.info.clone(),
+                                self.state_path.clone(),
+                            );
+                            async move { upstream.get_anisette_headers().await }.boxed()
+                        }
+                    };
 
                 // AssertUnwindSafe + catch_unwind turns the provider's bare
                 // `panic!()` into a caught panic payload. Without this the
                 // panic unwinds into the caller's critical section and can
                 // leave shared mutexes locked.
-                let inner = AssertUnwindSafe(upstream.get_anisette_headers()).catch_unwind();
+                let inner = AssertUnwindSafe(fetch).catch_unwind();
                 // Preserve state.plist across every failure mode — wiping it
                 // mid-retry generates a fresh device identity on the next
                 // attempt, which Apple sees as a brand-new device and rejects
@@ -179,8 +232,8 @@ impl AnisetteProvider for BridgeAnisetteProvider {
                         );
                         last_err = Some(AnisetteError::InvalidArgument(
                             format!(
-                                "Anisette provisioning timed out (attempt {}/{}). \
-                                 The anisette server (ani.sidestore.io) may be down.",
+                                "Anisette timed out (attempt {}/{}). \
+                                 The Mac relay or anisette server may be unreachable.",
                                 attempt + 1,
                                 MAX_RETRIES,
                             ),
