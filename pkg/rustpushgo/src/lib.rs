@@ -8,7 +8,7 @@ mod nac_relay;
 mod ids_guard;
 mod statuskitgo;
 mod statuskit_cloudkit;
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))] // uses local_config, which is macOS-only
 mod test_hwinfo;
 
 use std::{collections::HashMap, io::Cursor, path::PathBuf, str::FromStr, sync::Arc, time::Duration, sync::atomic::{AtomicU64, Ordering}};
