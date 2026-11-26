@@ -22,7 +22,8 @@ Security problems go through [SECURITY.md](SECURITY.md), not the issue tracker.
 - Commit messages follow [Conventional Commits](https://www.conventionalcommits.org):
   `fix: ...`, `feat: ...`, `docs: ...`, lowercase, imperative, no trailing
   period.
-- Update the comments and docs that describe the code you change.
+- Update the comments and docs that describe the code you change, but leave
+  `CHANGELOG.md` alone: it is written at release time.
 - New bridge files are named `macoun_*.go` and carry the MPL-2.0 header, so it
   stays easy to see what differs from the corten-matrix snapshot. The generated
   `pkg/rustpushgo` bindings are not edited by hand, except the hand-written
