@@ -675,6 +675,7 @@ func (c *IMClient) CreateGroup(ctx context.Context, params *bridgev2.GroupCreate
 		// GetChatInfo gives unnamed groups.
 		if built := c.buildGroupName(participants); built != "" {
 			info.Name = &built
+			info.ExtraUpdates = recordGeneratedGroupName(built, info.ExtraUpdates)
 		}
 	}
 	return &bridgev2.CreateChatResponse{PortalKey: portalKey, PortalInfo: info}, nil

@@ -14,8 +14,12 @@ import (
 type PortalMetadata struct {
 	ThreadID   string `json:"thread_id,omitempty"`
 	SenderGuid string `json:"sender_guid,omitempty"` // Persistent iMessage group UUID
-	GroupName  string `json:"group_name,omitempty"`   // iMessage cv_name for outbound routing
-	IsSms      bool   `json:"is_sms,omitempty"`       // True if this portal routes through SMS
+	GroupName  string `json:"group_name,omitempty"`  // iMessage cv_name for outbound routing
+	IsSms      bool   `json:"is_sms,omitempty"`      // True if this portal routes through SMS
+	// GeneratedName is the room name the bridge last built from the members
+	// of an unnamed group. While the room still has it, it is refreshed; see
+	// macoun_group_names.go. Local to Matrix, never sent to Apple.
+	GeneratedName string `json:"generated_name,omitempty"`
 }
 
 type GhostMetadata struct{}

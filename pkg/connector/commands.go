@@ -763,7 +763,7 @@ func fnRestoreChatFromCloudKit(ce *commands.Event, login *bridgev2.UserLogin, cl
 						}
 					}
 					if len(normalized) > 0 {
-						if built := client.buildGroupName(normalized); built != "" && built != "Group Chat" {
+						if built := client.buildGroupName(normalized); built != "" {
 							name = built
 						}
 					}
@@ -1101,7 +1101,7 @@ func friendlyPortalName(ctx context.Context, bridge *bridgev2.Bridge, client *IM
 	// For group chats, resolve from cloud store (display_name / contact names).
 	isGroup := strings.HasPrefix(portalID, "gid:") || strings.Contains(portalID, ",")
 	if isGroup && client != nil {
-		if name, _ := client.resolveGroupName(ctx, portalID); name != "" && name != "Group Chat" {
+		if name, _ := client.resolveGroupName(ctx, portalID); name != "" {
 			return name
 		}
 	}

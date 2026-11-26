@@ -454,7 +454,7 @@ func (c *IMClient) seedDeletedChatsFromRecycleBin(log zerolog.Logger) {
 					}
 				}
 				if len(normalized) > 0 {
-					if built := c.buildGroupName(normalized); built != "" && built != "Group Chat" {
+					if built := c.buildGroupName(normalized); built != "" {
 						name = built
 					}
 				}
@@ -1738,10 +1738,11 @@ func (c *IMClient) refreshGhostNamesFromContacts(log zerolog.Logger) {
 	log.Info().Int("reconciled", reconciled).Int("total", len(ghosts)).Msg("Reconciled ghost profiles from contacts")
 }
 
-// refreshGroupPortalNamesFromContacts re-resolves group portal names using
-// contact data. Portals created before contacts loaded may have raw phone
-// numbers / email addresses as the room name. This also picks up contact
-// edits on subsequent periodic syncs.
+// refreshGroupPortalNamesFromContacts re-resolves group portal names on every
+// contact sync. A participant's name for the group replaces whatever the room
+// has; a name built from the members replaces only a name the bridge built
+// itself, so contact edits and roster changes reach unnamed groups while a
+// name the user chose stays (see planGroupNameRefresh).
 func (c *IMClient) refreshGroupPortalNamesFromContacts(log zerolog.Logger) {
 	if c.contacts == nil {
 		return
@@ -1768,8 +1769,23 @@ func (c *IMClient) refreshGroupPortalNamesFromContacts(log zerolog.Logger) {
 		total++
 
 		newName, authoritative := c.resolveGroupName(ctx, portalID)
-		if !planGroupNameRefresh(portal.Name, newName, authoritative) {
+		meta, _ := portal.Metadata.(*PortalMetadata)
+		rename, record := planGroupNameRefresh(portal.Name, newName, authoritative, meta)
+		if !rename && !record {
 			continue
+		}
+		info := &bridgev2.ChatInfo{
+			// Exclude from timeline so Beeper doesn't render
+			// contact-based name resolution as a bridge bot message.
+			ExcludeChangesFromTimeline: true,
+		}
+		generated := ""
+		if !authoritative {
+			generated = newName
+		}
+		info.ExtraUpdates = recordGeneratedGroupName(generated, nil)
+		if rename {
+			info.Name = &newName
 		}
 
 		c.UserLogin.QueueRemoteEvent(&simplevent.ChatInfoChange{
@@ -1783,16 +1799,11 @@ func (c *IMClient) refreshGroupPortalNamesFromContacts(log zerolog.Logger) {
 					return lc.Str("portal_id", portalID).Str("source", "group_name_refresh")
 				},
 			},
-			ChatInfoChange: &bridgev2.ChatInfoChange{
-				ChatInfo: &bridgev2.ChatInfo{
-					Name: &newName,
-					// Exclude from timeline so Beeper doesn't render
-					// contact-based name resolution as a bridge bot message.
-					ExcludeChangesFromTimeline: true,
-				},
-			},
+			ChatInfoChange: &bridgev2.ChatInfoChange{ChatInfo: info},
 		})
-		updated++
+		if rename {
+			updated++
+		}
 	}
 	log.Info().Int("updated", updated).Int("total_groups", total).Msg("Refreshed group portal names from contacts")
 }
