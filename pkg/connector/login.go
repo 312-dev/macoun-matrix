@@ -331,7 +331,7 @@ func (l *ExternalKeyLogin) SubmitUserInput(ctx context.Context, input map[string
 		disconnectLoadedClients(l.User, extLog)
 		l.conn = rustpushgo.Connect(cfg, apsState)
 
-		nacNote := "Registration uses the hardware key for NAC validation (no Mac needed at runtime)."
+		nacNote := "Registration gets NAC validation data from the Mac relay named in the hardware key or MACOUN_NAC_RELAY_URL; the Mac must be reachable whenever the bridge registers."
 		return &bridgev2.LoginStep{
 			Type:         bridgev2.LoginStepTypeUserInput,
 			StepID:       LoginStepAppleIDPassword,
