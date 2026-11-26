@@ -71,8 +71,9 @@ because the bridge reads none from CloudKit.
 
 ## Matrix to iMessage
 
-Put the key on an outgoing text message (`m.text`, `m.notice`, `m.emote`) with
-an id from the table. `body` is sent unchanged.
+Put the key on an outgoing text message (`m.text`, `m.notice`, `m.emote`) or
+attachment (`m.image`, `m.video`, `m.audio`, `m.file`) with an id from the
+table. `body` is sent unchanged.
 
 ```json
 {
@@ -86,7 +87,11 @@ an id from the table. `body` is sent unchanged.
   `formatted_body` alone is not turned into invisible ink.
 - An unknown id, or a value that is not a string, is logged and the message
   goes out without an effect.
-- Effects on attachments are not sent.
+- On an attachment with a caption (a `body` that differs from `filename`),
+  the caption goes out as its own iMessage after the attachment, and the
+  effect rides on the attachment only, so it plays once. A separate `m.text`
+  sent after the attachment is an ordinary message: put the key on it only if
+  it should have its own effect.
 - A message bound for the text-message relay (SMS) goes out without the
   effect, which SMS cannot carry.
 - A text long enough to be split carries the effect on its first part only.
@@ -94,4 +99,6 @@ an id from the table. `body` is sent unchanged.
 Inside the bridge the Go connector passes the effect to `send_message` in
 `pkg/rustpushgo/src/lib.rs` as an envelope ahead of the text,
 `\x00FX\x01<effect id>\x00`, next to the existing rich-link envelope. Rust
-strips it and sets the message's effect.
+strips it and sets the message's effect. For an attachment the envelope alone
+is `send_attachment`'s `body` argument, split off the same way
+(`attachment_effect_and_subject`).
