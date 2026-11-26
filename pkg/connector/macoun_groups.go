@@ -355,60 +355,72 @@ func groupMembershipPlan(change bridgev2.MembershipChangeType, current []string,
 // HandleMatrixMembership adds or removes an iMessage group participant when a
 // ghost is invited to or removed from the room, and leaves the group when the
 // user leaves the room (bridgev2 only forwards that with bridge_matrix_leave
-// enabled). The stored participant list is updated at once, as
-// handleParticipantChange does for a change made on Apple's side, so the next
-// outgoing message goes to the new list.
+// enabled). Rooms keep invite and kick locked for Matrix users
+// (hardenedPowerLevels), so on most homeservers these events only arrive as
+// Beeper state requests; the group-add, group-remove and group-leave commands
+// (macoun_group_commands.go) reach the same code from any client.
 func (c *IMClient) HandleMatrixMembership(ctx context.Context, msg *bridgev2.MatrixMembershipChange) (*bridgev2.MatrixMembershipResult, error) {
-	ops := c.groupOps()
-	if ops == nil {
-		return nil, bridgev2.ErrNotLoggedIn
-	}
 	portalID := string(msg.Portal.ID)
 	isGroup := strings.HasPrefix(portalID, "gid:") || strings.Contains(portalID, ",")
-	if !isGroup {
-		if msg.Type == bridgev2.Leave {
-			// Leaving the room of a direct chat changes nothing on Apple's side.
-			return nil, nil
-		}
-		return nil, errNotIMessageGroup
+	if !isGroup && msg.Type == bridgev2.Leave {
+		// Leaving the room of a direct chat changes nothing on Apple's side.
+		return nil, nil
 	}
-	if !strings.HasPrefix(portalID, "gid:") {
-		return nil, errLegacyGroupMembers
-	}
-	conv, err := c.matrixGroupConversation(msg.Portal)
-	if err != nil {
-		return nil, err
-	}
-	self := normalizeIdentifierForPortalID(c.handle)
-
 	target := ""
 	if msg.Type != bridgev2.Leave {
 		ghost, ok := msg.Target.(*bridgev2.Ghost)
 		if !ok || ghost == nil {
 			return nil, errUnsupportedMembership
 		}
-		target = normalizeIdentifierForPortalID(string(ghost.ID))
+		target = string(ghost.ID)
+	}
+	_, err := c.changeGroupParticipants(ctx, msg.Portal, msg.Type, target)
+	return nil, err
+}
+
+// changeGroupParticipants applies one membership change (bridgev2.Invite, Kick
+// or Leave) to an iMessage group and reports whether a change was sent.
+// target is the handle being added or removed and is ignored for Leave. The
+// stored participant list is updated at once, as handleParticipantChange does
+// for a change made on Apple's side, so the next outgoing message goes to the
+// new list.
+func (c *IMClient) changeGroupParticipants(ctx context.Context, portal *bridgev2.Portal, change bridgev2.MembershipChangeType, target string) (sent bool, err error) {
+	ops := c.groupOps()
+	if ops == nil {
+		return false, bridgev2.ErrNotLoggedIn
+	}
+	portalID := string(portal.ID)
+	if !strings.HasPrefix(portalID, "gid:") && !strings.Contains(portalID, ",") {
+		return false, errNotIMessageGroup
+	}
+	if !strings.HasPrefix(portalID, "gid:") {
+		return false, errLegacyGroupMembers
+	}
+	conv, err := c.matrixGroupConversation(portal)
+	if err != nil {
+		return false, err
+	}
+	self := normalizeIdentifierForPortalID(c.handle)
+	if change != bridgev2.Leave {
+		target = normalizeIdentifierForPortalID(target)
 		if target == "" || c.isMyHandle(target) {
-			return nil, errUnsupportedMembership
+			return false, errUnsupportedMembership
 		}
 	}
 
-	next, err := groupMembershipPlan(msg.Type, conv.Participants, self, target)
-	if err != nil {
-		return nil, err
+	next, err := groupMembershipPlan(change, conv.Participants, self, target)
+	if err != nil || next == nil {
+		return false, err
 	}
-	if next == nil {
-		return nil, nil
-	}
-	if msg.Type == bridgev2.Invite {
+	if change == bridgev2.Invite {
 		if valid := ops.ValidateTargets([]string{target}, c.handle); len(valid) == 0 {
-			return nil, fmt.Errorf("%s cannot be reached over iMessage, so it cannot join an iMessage group", target)
+			return false, fmt.Errorf("%s cannot be reached over iMessage, so it cannot join an iMessage group", target)
 		}
 	}
 	// conv holds the list before the change; rustpush addresses the message to
 	// both lists, so someone being added is told too.
 	if _, err = ops.SendChangeParticipants(conv, next, groupVersionNow(), c.handle); err != nil {
-		return nil, fmt.Errorf("failed to change the iMessage group's participants: %w", err)
+		return false, fmt.Errorf("failed to change the iMessage group's participants: %w", err)
 	}
 	if c.cloudStore != nil {
 		if err = c.cloudStore.updateChatParticipants(ctx, portalID, next); err != nil {
@@ -422,7 +434,50 @@ func (c *IMClient) HandleMatrixMembership(ctx context.Context, msg *bridgev2.Mat
 	}
 	c.imGroupParticipants[portalID] = next
 	c.imGroupParticipantsMu.Unlock()
-	return nil, nil
+	return true, nil
+}
+
+// matrixMayEditGroupMeta reports whether Matrix users may send name and avatar
+// events in the portal's room: only in iMessage groups, where
+// HandleMatrixRoomName and HandleMatrixRoomAvatar can carry them to Apple.
+func (c *IMClient) matrixMayEditGroupMeta(portal *bridgev2.Portal) bool {
+	if portal == nil {
+		return false
+	}
+	portalID := string(portal.ID)
+	if !strings.HasPrefix(portalID, "gid:") && !strings.Contains(portalID, ",") {
+		return false
+	}
+	return !c.isPortalSMS(portalID)
+}
+
+// syncGroupMetaLevels sets the power levels of the room name and room avatar
+// events and reports whether it changed anything. Where editing is allowed the
+// level is the room's users_default, so the bridge's user (who is never raised
+// above it, see resetEscalatedUsers) can rename the group and set its photo.
+// Elsewhere an entry that sits below state_default is removed, which puts the
+// event back under state_default; rooms that never had an entry are left
+// untouched, so this causes no power-level event in them.
+func syncGroupMetaLevels(pl *event.PowerLevelsEventContent, allow bool) bool {
+	if pl == nil {
+		return false
+	}
+	changed := false
+	for _, evtType := range []event.Type{event.StateRoomName, event.StateRoomAvatar} {
+		level, has := pl.Events[evtType.Type]
+		switch {
+		case allow && (!has || level != pl.UsersDefault):
+			if pl.Events == nil {
+				pl.Events = make(map[string]int)
+			}
+			pl.Events[evtType.Type] = pl.UsersDefault
+			changed = true
+		case !allow && has && level < pl.StateDefault():
+			delete(pl.Events, evtType.Type)
+			changed = true
+		}
+	}
+	return changed
 }
 
 // newGroupID returns a fresh group id: a random (version 4) UUID in the

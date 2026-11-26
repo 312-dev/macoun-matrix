@@ -478,3 +478,76 @@ func countRows(t *testing.T, ctx context.Context, store *cloudBackfillStore, tab
 	}
 	return n
 }
+
+// TestMacounGroupMetaPowerLevels: in an iMessage group the name and avatar
+// events drop to the level every user has; anywhere else such an entry is
+// removed, and a room that never had one is not touched.
+func TestMacounGroupMetaPowerLevels(t *testing.T) {
+	name, avatar := event.StateRoomName.Type, event.StateRoomAvatar.Type
+
+	pl := &event.PowerLevelsEventContent{}
+	if !syncGroupMetaLevels(pl, true) || pl.Events[name] != 0 || pl.Events[avatar] != 0 {
+		t.Fatalf("iMessage group: events=%v", pl.Events)
+	}
+	if _, has := pl.Events[name]; !has {
+		t.Fatal("the name level must be an explicit entry, or state_default (50) applies")
+	}
+	if syncGroupMetaLevels(pl, true) {
+		t.Fatal("a second pass over the same levels must change nothing")
+	}
+
+	// The group turns into a carrier group: back under state_default.
+	if !syncGroupMetaLevels(pl, false) {
+		t.Fatal("entries below state_default must be removed where editing is not allowed")
+	}
+	if _, has := pl.Events[name]; has {
+		t.Fatalf("name entry survived: %v", pl.Events)
+	}
+
+	// A direct chat that never had entries, and one where someone locked the
+	// name harder than state_default: both left alone.
+	if syncGroupMetaLevels(&event.PowerLevelsEventContent{}, false) {
+		t.Fatal("a room without entries must not get a power-level change")
+	}
+	locked := &event.PowerLevelsEventContent{Events: map[string]int{name: 100}}
+	if syncGroupMetaLevels(locked, false) || locked.Events[name] != 100 {
+		t.Fatalf("a stricter entry must be kept: %v", locked.Events)
+	}
+
+	client := &IMClient{smsPortals: map[string]bool{"gid:sms": true}}
+	for portalID, want := range map[string]bool{
+		groupTestPortal: true,
+		"tel:+15550001001,tel:+15550001002,tel:+15550001000": true,
+		groupTestAlice: false,
+		"gid:sms":      false,
+	} {
+		if got := client.matrixMayEditGroupMeta(groupTestPortalObject(portalID, nil)); got != want {
+			t.Errorf("matrixMayEditGroupMeta(%s) = %v, want %v", portalID, got, want)
+		}
+	}
+	if client.matrixMayEditGroupMeta(nil) {
+		t.Error("no portal, no editing")
+	}
+}
+
+// TestMacounNewGroupArgs: identifiers are normalized like start-chat's and the
+// name is everything after the word "name".
+func TestMacounNewGroupArgs(t *testing.T) {
+	participants, name := parseNewGroupArgs([]string{"+1(555)000-1001", "Carol@Example.com", "tel:+15550001002", "name", "Weekend", "trip"})
+	want := []networkid.UserID{networkid.UserID(groupTestAlice), networkid.UserID(groupTestCarol), networkid.UserID(groupTestBob)}
+	if !reflect.DeepEqual(participants, want) || name != "Weekend trip" {
+		t.Fatalf("participants=%v name=%q", participants, name)
+	}
+	if participants, name = parseNewGroupArgs([]string{"+15550001001", "+15550001002"}); len(participants) != 2 || name != "" {
+		t.Fatalf("no name: participants=%v name=%q", participants, name)
+	}
+	found := map[string]bool{}
+	for _, h := range BridgeCommands() {
+		found[h.Name] = true
+	}
+	for _, cmd := range []string{"new-group", "group-add", "group-remove", "group-leave"} {
+		if !found[cmd] {
+			t.Errorf("%s is not registered", cmd)
+		}
+	}
+}

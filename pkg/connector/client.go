@@ -7484,7 +7484,9 @@ const (
 // hardenedPowerLevels returns the power-level overrides applied to every portal
 // — DMs and group chats, on both the CloudKit (GetChatInfo) and chat.db
 // (chatDBInfoToBridgev2) paths — so Matrix users can't clobber bridge-managed
-// room state. See docs/postmortem-style notes: a user raising their power level
+// room state. The one exception is the name and avatar of an iMessage group,
+// which the user may set because the bridge carries them to Apple
+// (syncGroupMetaLevels). See docs/postmortem-style notes: a user raising their power level
 // can otherwise tombstone the room, silently kill incoming messages by raising
 // events_default, pull unbridged users into a group, or redact other people's
 // messages.
@@ -7530,7 +7532,13 @@ func (c *IMClient) hardenedPowerLevels(ctx context.Context, portal *bridgev2.Por
 		Ban:    ptr.Ptr(plLockLevel),
 		Redact: ptr.Ptr(plLockLevel), // can't redact others; self-unsend still works
 		Custom: func(pl *event.PowerLevelsEventContent) bool {
-			return c.resetEscalatedUsers(ctx, portal, pl)
+			changed := c.resetEscalatedUsers(ctx, portal, pl)
+			// Name and avatar are the two pieces of room state a Matrix user
+			// may set, and only in iMessage groups (macoun_groups.go).
+			if syncGroupMetaLevels(pl, c.matrixMayEditGroupMeta(portal)) {
+				changed = true
+			}
+			return changed
 		},
 	}
 }

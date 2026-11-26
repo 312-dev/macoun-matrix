@@ -260,6 +260,8 @@ To abort an interactive command (a picker waiting for your reply), type `cancel`
 | `start-chat` | Open a new iMessage DM. With no arguments, the bot walks you through phone vs. email and explains the country-code format. With an argument (`start-chat +15551234567` or `start-chat someone@icloud.com`) it skips the picker. |
 | `contacts` | Search your synced contacts by name (iCloud, external CardDAV, or local macOS Contacts depending on `backfill_source` and `carddav` settings) and reply with a number to open a chat. Different from `start-chat` — use this when you don't remember the number/email. Alias: `find`. |
 | `restore-chat` | List iMessage chats in the recycle bin. Reply with a number to bring one back, including its history. |
+| `new-group` | Create an iMessage group: `new-group +15551234567 someone@icloud.com name Weekend trip` (two or more people, written without spaces; the name is optional). See [Groups](#groups). |
+| `group-add`, `group-remove`, `group-leave` | Run inside a group's room: add or remove a person (`group-add +15551234567`), or leave the group. |
 | `delete-portal` | Admin only, run inside a bridged chat: delete that room and keep it deleted across restarts. Nothing is deleted on Apple's side; a new message in the chat or `restore-chat` brings it back. |
 | `logout` | Sign out of iMessage. Lists active handles, you reply with a number (or `all`). The bot then walks you through the manual step at `appleid.apple.com → Devices` to fully revoke the bridge from Apple's servers. |
 | `help` | Full command list, grouped by section. |
@@ -289,6 +291,36 @@ The bridge has no API to deregister your IDS identity from Apple, so the success
 4. Click **Remove from account**.
 
 Until you do step 4, Apple still considers the bridge a registered iMessage device.
+
+## Groups
+
+iMessage groups can be created and managed from Matrix. Carrier (SMS/MMS/RCS)
+groups cannot: their rooms refuse these changes.
+
+- **Create.** `new-group <phone or email> <phone or email> [...] [name <group name>]`
+  in the management room, or the provisioning API's create-group endpoint
+  (group type `group`) for clients that have a "new group" screen. Everyone
+  must be reachable over iMessage; if someone is not, nothing is created and
+  the reply says who. iMessage has no "create group" step: the others see the
+  group when you send the first message in the new room.
+- **Rename.** Change the room name. The group is renamed for everyone. A group
+  name cannot be cleared from Matrix.
+- **Photo.** Change or remove the room avatar. The picture is cropped to a
+  square and sent as the group photo.
+- **Add, remove, leave.** `group-add <phone or email>`, `group-remove <phone or
+  email>` and `group-leave` inside the group's room. iMessage only allows
+  removing someone, or leaving, while at least three people remain. The
+  room's own invite and kick stay locked, so nobody can pull a Matrix user
+  who is not on iMessage into a bridged chat.
+
+If a rename or photo change is refused (for example in a carrier group), the
+room keeps the new name or avatar until the next sync unless
+`bridge.revert_failed_state_changes` is `true` in `config.yaml`; with it the
+bridge puts the old one back at once.
+
+Groups whose room is older than the group id scheme (their internal id is a
+list of participants) can be renamed and given a photo, but not have members
+changed from Matrix.
 
 ## FaceTime
 
@@ -630,6 +662,8 @@ pkg/connector/                              # bridgev2 connector — the main Go
   ├── macoun_startup_hold.go                #   which incoming messages wait for the startup pass
   ├── macoun_provider_status.go             #   Mac relay outage and recovery as bridge states
   ├── macoun_delete_portal.go               #   delete-portal that records the deletion
+  ├── macoun_groups.go                      #   create, rename, photo and membership of iMessage groups from Matrix
+  ├── macoun_group_commands.go              #   new-group, group-add, group-remove, group-leave
   ├── heic.go                               #   HEIC → JPEG conversion (libheif)
   ├── audioconvert.go                       #   audio remux to M4A / CAF
   ├── urlpreview.go                         #   OpenGraph / Twitter Card URL-preview extractor
