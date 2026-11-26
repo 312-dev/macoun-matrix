@@ -7859,9 +7859,19 @@ func (c *IMClient) GetChatInfo(ctx context.Context, portal *bridgev2.Portal) (*b
 		// Setting the name here for existing portals would revert correct
 		// names to stale values from CloudKit or metadata, and produce
 		// unwanted bridge bot "name changed" events.
+		// A built name is recorded as the bridge's own (GeneratedName), so
+		// later contact syncs may replace it; see macoun_group_names.go.
+		var generatedName *string
 		if portal.MXID == "" || portal.Name == "" {
-			groupName, _ := c.resolveGroupName(ctx, portalID)
-			chatInfo.Name = &groupName
+			groupName, authoritative := c.resolveGroupName(ctx, portalID)
+			if groupName != "" {
+				chatInfo.Name = &groupName
+				if !authoritative {
+					generatedName = &groupName
+				} else {
+					generatedName = new(string)
+				}
+			}
 		}
 
 		// Set group photo from cache or CloudKit.
@@ -7936,6 +7946,9 @@ func (c *IMClient) GetChatInfo(ctx context.Context, portal *bridgev2.Portal) (*b
 				}
 				return changed
 			}
+		}
+		if generatedName != nil {
+			chatInfo.ExtraUpdates = recordGeneratedGroupName(*generatedName, chatInfo.ExtraUpdates)
 		}
 	} else {
 		chatInfo.Type = ptr.Ptr(database.RoomTypeDM)
@@ -11906,7 +11919,7 @@ func (c *IMClient) makePortalKey(participants []string, groupName *string, sende
 		// Cache normalized participants in memory so resolveGroupMembers
 		// can find them immediately. The cloud_chat DB write happens async
 		// and may not complete before GetChatInfo is called during portal
-		// creation, which would cause the group name to resolve as "Group Chat".
+		// creation, which would leave the new room without a name.
 		if len(participants) > 0 {
 			normalized := make([]string, 0, len(participants))
 			for _, p := range participants {
@@ -12354,15 +12367,14 @@ func (c *IMClient) resolveGroupName(ctx context.Context, portalID string) (name 
 	}
 
 	// 3) Build from contact-resolved member names (fallback, non-authoritative)
-	members := c.resolveGroupMembers(ctx, portalID)
-	if len(members) == 0 {
-		return "Group Chat", false
-	}
-	return c.buildGroupName(members), false
+	// With no members known yet there is nothing to name the group by: the
+	// result is empty and the room stays unnamed until the roster arrives.
+	return c.buildGroupName(c.resolveGroupMembers(ctx, portalID)), false
 }
 
 // buildGroupName creates a human-readable group name from member identifiers
 // by resolving contact names where possible, falling back to phone/email.
+// It returns "" when no member other than the user is known.
 func (c *IMClient) buildGroupName(members []string) string {
 	var names []string
 	for _, memberID := range members {
@@ -12395,7 +12407,7 @@ func (c *IMClient) buildGroupName(members []string) string {
 		names = append(names, name)
 	}
 	if len(names) == 0 {
-		return "Group Chat"
+		return ""
 	}
 	if len(names) <= 4 {
 		return strings.Join(names, ", ")
@@ -14023,7 +14035,9 @@ func (c *IMClient) chatDBInfoToBridgev2(info *imessage.ChatInfo) *bridgev2.ChatI
 		if displayName == "" {
 			displayName = c.buildGroupName(info.Members)
 		}
-		chatInfo.Name = &displayName
+		if displayName != "" {
+			chatInfo.Name = &displayName
+		}
 	}
 
 	if parsed.IsGroup {
