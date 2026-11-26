@@ -608,6 +608,12 @@ type IMClient struct {
 	// first setCloudSyncDone; decremented by onForwardBackfillDone.
 	pendingInitialBackfills int64
 
+	// groupSenderOverride and matrixMediaOverride replace the rustpush client
+	// and the Matrix media download in the Matrix-side group operations
+	// (macoun_groups.go). nil outside tests.
+	groupSenderOverride groupSender
+	matrixMediaOverride func(ctx context.Context, uri id.ContentURIString) ([]byte, error)
+
 	// providerOutage tracks whether an outage of the validation-data /
 	// anisette provider has been reported as a bridge state.
 	providerOutage providerOutageTracker

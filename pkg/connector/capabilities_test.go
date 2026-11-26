@@ -94,16 +94,30 @@ func TestCapsDM_NoGroupFeatures(t *testing.T) {
 	if _, ok := capsDM.MemberActions[event.MemberActionKick]; ok {
 		t.Error("capsDM should not have MemberActionKick")
 	}
-	// Current bridge capabilities also do not expose room state or member actions for group chats.
-	if _, ok := caps.State[event.StateRoomName.Type]; ok {
-		t.Error("caps should not have StateRoomName")
+}
+
+// TestCaps_GroupFeatures: group rooms advertise what macoun_groups.go handles.
+func TestCaps_GroupFeatures(t *testing.T) {
+	for _, state := range []string{event.StateRoomName.Type, event.StateRoomAvatar.Type} {
+		if f, ok := caps.State[state]; !ok || f.Level != event.CapLevelFullySupported {
+			t.Errorf("caps should fully support %s", state)
+		}
 	}
-	if _, ok := caps.MemberActions[event.MemberActionInvite]; ok {
-		t.Error("caps should not have MemberActionInvite")
+	for _, action := range []event.MemberAction{event.MemberActionInvite, event.MemberActionKick, event.MemberActionLeave} {
+		if _, ok := caps.MemberActions[action]; !ok {
+			t.Errorf("caps should have member action %s", action)
+		}
+	}
+	if _, ok := caps.MemberActions[event.MemberActionBan]; ok {
+		t.Error("caps should not offer ban: iMessage has no equivalent")
+	}
+	group, ok := generalCaps.Provisioning.GroupCreation[groupCreateType]
+	if !ok || !group.Participants.Allowed || group.Participants.MinLength != groupMinOthers || !group.Name.Allowed {
+		t.Errorf("provisioning should offer iMessage group creation, got %+v", generalCaps.Provisioning.GroupCreation)
 	}
 }
 
-func TestCapsDM_StillHasLeave(t *testing.T) {
+func TestCapsDM_HasNoLeave(t *testing.T) {
 	if _, ok := capsDM.MemberActions[event.MemberActionLeave]; ok {
 		t.Error("capsDM should not have MemberActionLeave")
 	}

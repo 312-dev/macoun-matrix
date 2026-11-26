@@ -21,7 +21,7 @@ func supportedIfFFmpeg() event.CapabilitySupportLevel {
 }
 
 const iMessageMaxFileSize = 2000 * 1024 * 1024 // 2 GB
-const capabilityID = "fi.mau.imessage.capabilities.2026_07"
+const capabilityID = "fi.mau.imessage.capabilities.2026_11"
 
 var caps = &event.RoomFeatures{
 	ID: capabilityID,
@@ -98,14 +98,44 @@ var caps = &event.RoomFeatures{
 var capsDM *event.RoomFeatures
 
 func init() {
+	// The DM copy is taken first: renaming, a room avatar and membership
+	// changes only mean something in a group (macoun_groups.go). The handlers
+	// also refuse carrier (SMS/MMS/RCS) groups, which share these features
+	// because a portal's service can change over its lifetime.
 	c := *caps
 	capsDM = &c
 	capsDM.ID = capabilityID + "+dm"
+
+	caps.State = event.StateFeatureMap{
+		event.StateRoomName.Type:   {Level: event.CapLevelFullySupported},
+		event.StateRoomAvatar.Type: {Level: event.CapLevelFullySupported},
+	}
+	caps.MemberActions = event.MemberFeatureMap{
+		event.MemberActionInvite: event.CapLevelFullySupported,
+		event.MemberActionKick:   event.CapLevelFullySupported,
+		// Leaving reaches Apple only when bridge_matrix_leave is enabled, and
+		// only while the group stays large enough.
+		event.MemberActionLeave: event.CapLevelPartialSupport,
+	}
 }
 
 var generalCaps = &bridgev2.NetworkGeneralCapabilities{
 	DisappearingMessages: false,
 	AggressiveUpdateInfo: true,
+	Provisioning: bridgev2.ProvisioningCapabilities{
+		ResolveIdentifier: bridgev2.ResolveIdentifierCapabilities{
+			CreateDM:    true,
+			LookupPhone: true,
+			LookupEmail: true,
+		},
+		GroupCreation: map[string]bridgev2.GroupTypeCapabilities{
+			groupCreateType: {
+				TypeDescription: "iMessage group",
+				Name:            bridgev2.GroupFieldCapability{Allowed: true},
+				Participants:    bridgev2.GroupFieldCapability{Allowed: true, Required: true, MinLength: groupMinOthers},
+			},
+		},
+	},
 }
 
 func (c *IMConnector) GetCapabilities() *bridgev2.NetworkGeneralCapabilities {
@@ -113,8 +143,8 @@ func (c *IMConnector) GetCapabilities() *bridgev2.NetworkGeneralCapabilities {
 }
 
 // Bump the capabilities version whenever `caps` changes, otherwise portals keep
-// serving the previously cached capability event. Last bumped when
-// MaxTextLength was added.
+// serving the previously cached capability event. Last bumped when the group
+// state and member actions were added.
 func (c *IMConnector) GetBridgeInfoVersion() (info, capabilities int) {
-	return 1, 2
+	return 1, 3
 }
