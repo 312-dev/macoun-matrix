@@ -96,7 +96,8 @@ func ensureRelayAuth() (*tls.Config, string, error) {
 	}
 
 	log.Printf("TLS cert fingerprint: %s", fingerprint)
-	log.Printf("Auth token: %s...%s", token[:4], token[len(token)-4:])
+	// macoun-relay: the token is never logged, not even in part.
+	log.Printf("Auth token: loaded from %s (not logged)", tokenPath)
 	log.Printf("Relay info: %s", infoPath)
 
 	return tlsConfig, token, nil
