@@ -6782,9 +6782,17 @@ func (c *IMClient) handleMatrixFile(ctx context.Context, msg *bridgev2.MatrixMes
 
 	replyGuid, replyPart := extractReplyInfo(msg.ReplyTo)
 
+	// An iMessage effect on the event rides on the attachment. A caption sent
+	// below as its own iMessage goes out plain, so the effect plays once.
+	var rawContent map[string]any
+	if msg.Event != nil {
+		rawContent = msg.Event.Content.Raw
+	}
+	effectBody := outboundAttachmentEffect(ctx, rawContent, conv.IsSms)
+
 	// Rust-side send_with_flap_retry handles SendTimedOut retry with a stable
 	// UUID — no Go-side retry here (would orphan delivery receipts).
-	uuid, err := c.client.SendAttachment(conv, data, mimeType, mimeToUTI(mimeType), fileName, c.handle, replyGuid, replyPart, nil)
+	uuid, err := c.client.SendAttachment(conv, data, mimeType, mimeToUTI(mimeType), fileName, c.handle, replyGuid, replyPart, effectBody)
 	if err != nil {
 		if errors.Is(err, rustpushgo.ErrWrappedErrorNoSmsRelay) {
 			return nil, errNoCarrierRoute

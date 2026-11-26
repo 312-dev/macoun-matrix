@@ -118,3 +118,15 @@ func outboundTextWithEffect(ctx context.Context, raw map[string]any, isSms bool,
 	// out any id that holds one.
 	return "\x00FX\x01" + effect + "\x00" + text
 }
+
+// outboundAttachmentEffect returns the body argument for SendAttachment: the
+// effect envelope alone when the message's content asks for a known effect,
+// nil otherwise, under the same rules as outboundTextWithEffect.
+// send_attachment splits the envelope off into the message's effect
+// (attachment_effect_and_subject in lib.rs).
+func outboundAttachmentEffect(ctx context.Context, raw map[string]any, isSms bool) *string {
+	if body := outboundTextWithEffect(ctx, raw, isSms, ""); body != "" {
+		return &body
+	}
+	return nil
+}

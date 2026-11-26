@@ -314,6 +314,19 @@ pub(crate) fn split_effect_envelope(text: String) -> (Option<String>, String) {
     (None, text)
 }
 
+/// The effect and subject for send_attachment. Its body may start with the
+/// effect envelope, which the Go side sends alone for a photo or file that
+/// carries an effect; whatever follows the envelope is the subject.
+pub(crate) fn attachment_effect_and_subject(body: Option<String>) -> (Option<String>, Option<String>) {
+    match body {
+        None => (None, None),
+        Some(body) => {
+            let (effect, rest) = split_effect_envelope(body);
+            (effect, Some(rest).filter(|s| !s.is_empty()))
+        }
+    }
+}
+
 mod manual_ford {
     use super::*;
     use aes_siv::{siv::CmacSiv, KeyInit};
@@ -10599,19 +10612,20 @@ impl Client {
         }];
 
         // Captions are sent via the subject field in the iMessage plist,
-        // not as a separate text part in the XML body.
-        let subject = body.clone().filter(|s| !s.is_empty());
+        // not as a separate text part in the XML body. An effect envelope
+        // ahead of it becomes the message's effect.
+        let (effect, subject) = attachment_effect_and_subject(body);
 
         let mut msg = MessageInst::new(
             conv.clone(),
             &handle,
             Message::Message(NormalMessage {
                 parts: MessageParts(parts),
-                effect: None,
+                effect,
                 reply_guid: reply_guid.clone(),
                 reply_part: reply_part.clone(),
                 service,
-                subject,
+                subject: subject.clone(),
                 app: None,
                 link_meta: None,
                 voice: is_voice,
@@ -10638,7 +10652,8 @@ impl Client {
                     idx: None,
                     ext: None,
                 }];
-                let sms_subject = body.filter(|s| !s.is_empty());
+                // The text-message relay carries no effects.
+                let sms_subject = subject;
                 let mut sms_msg = MessageInst::new(
                     conv,
                     &handle,
