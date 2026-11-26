@@ -141,6 +141,16 @@ process:
 | `RUST_LOG` | suggested: `warn,rustpush=warn,rustpush::ids::identity_manager=info,rustpushgo=info` |
 | `MACOUN_OUTBOUND_LIMIT` | `off` disables the outbound limiter (not recommended) |
 
+In `config.yaml`, under the network section: with an external CardDAV
+server configured (`carddav:`, for example Google), iCloud CardDAV is not used
+for contact names anyway. `disable_icloud_contacts: true` also stops the
+periodic remote refresh of shared profiles (Name and Photo Sharing); cached
+profiles are still shown. Leave it `false` to keep that refresh.
+
+The outbound limiter keeps its state in a new table, `macoun_outbound_limiter`,
+encrypted with `macoun-limiter.key` in the state directory (created on first
+use).
+
 Anisette comes from the same relay. There is no public anisette fallback: with
 no source configured, anisette calls fail with an error. See
 [provider-contract.md](provider-contract.md) for using another provider.
@@ -168,8 +178,12 @@ no new login is needed. Work on a **copy** first.
 5. Expect Apple to see the Mac's own anisette machine on the next Apple ID
    token refresh. A 2FA prompt or iCloud features needing a re-login are
    possible; messaging does not depend on it.
-6. Check the start log for `Hardware key: validation data from NAC relay`. If
-   it is missing, the relay settings were not picked up.
+6. Check the start log for `macoun-matrix starting` and `Hardware key:
+   validation data from NAC relay`. If the second is missing, the relay
+   settings were not picked up.
+7. macoun adds the `macoun_outbound_limiter` table and `macoun-limiter.key`;
+   corten-matrix 1.3.x does not use either, so a rollback is unaffected. It leaves session.json's
+   `ids_key_cache` untouched.
 
 ## 7. Monitoring
 

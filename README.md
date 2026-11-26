@@ -6,6 +6,14 @@ runs `tools/macoun-relay` and supplies the two things Apple requires from a
 real Mac: NAC validation data and anisette headers, over an authenticated HTTPS
 relay (Tailscale recommended). No closed or PolyForm code is included.
 
+**Lineage.** macoun-matrix descends from Tulir Asokan's mautrix-imessage
+(2021), was ported to the bridgev2 framework as corten-matrix by lrhodin and
+contributors (notably mackid1993 and Tae Hagen), and forks the last
+open-source snapshot of corten-matrix (its MPL-2.0 source archive of
+2026-11-01). It replaces components that were never open source with open
+alternatives backed by a Mac you own. See [NOTICE.md](NOTICE.md) for the
+licence of each part.
+
 | Read | For |
 |---|---|
 | [docs/overview.md](docs/overview.md) | What it is, why, licences, architecture, when the Mac must be reachable |
@@ -15,12 +23,14 @@ relay (Tailscale recommended). No closed or PolyForm code is included.
 | [NOTICE.md](NOTICE.md) | File-level provenance and licences (MPL-2.0 base, AGPL-3.0 relay code, SSPL rustpush) |
 
 Differences from upstream: NAC and anisette from the relay (no public anisette
-fallback), an open outbound limiter in place of the closed one, no
+fallback), an open outbound limiter in place of the closed one (refused sends fail visibly), the `disable_icloud_contacts` switch from 64f9d73, no
 self-update, tolerance of a briefly unreachable Mac (early IDS
 re-registration, capped retry backoff, message flow while CloudKit bootstrap
-retries), and the 2.0.5 "vanishing message" fix. The Go module path, the
-`cmd/corten-matrix` package and the `corten-matrix` state directory keep their
-upstream names.
+retries), and the 2.0.5 "vanishing message" fix. The binary says macoun-matrix in
+`--version`, `help` and its startup banner; the internal bridge name (database
+owner and double-puppet marker), the Go module path, the `cmd/corten-matrix`
+package and the `corten-matrix` state directory keep their upstream names so
+an existing corten-matrix database and data directory work unchanged.
 
 Everything after this section is the upstream corten-matrix README, kept
 unchanged; where it says building from source is unsupported, that is

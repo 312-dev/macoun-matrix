@@ -2,6 +2,11 @@
 
 macoun-matrix is a fork of **corten-matrix** (Ludvig Rhodin and the
 Corten-Matrix Project contributors, originally `github.com/lrhodin/corten-matrix`).
+
+Lineage: mautrix-imessage by Tulir Asokan (2021), ported to the bridgev2
+framework as corten-matrix by lrhodin and contributors (notably mackid1993 and
+Tae Hagen); macoun-matrix forks the last open-source snapshot of corten-matrix
+(the MPL-2.0 archive of 2026-11-01).
 It is a private, self-built variant for Linux and is not affiliated with or
 supported by the Corten-Matrix Project.
 
@@ -15,9 +20,10 @@ supported by the Corten-Matrix Project.
 | `examples/monitoring/` | Written for macoun-matrix | MPL-2.0 |
 | `docs/` | Written for macoun-matrix | MPL-2.0 |
 | `tools/extract-key/` | corten-matrix `e2adc79d92`, `tools/extract-key/`; header added | AGPL-3.0 |
+| `disable_icloud_contacts` (`config.go`, `client.go`, `shared_profile.go`, example config) | The Go patches in corten-matrix `64f9d73`'s Makefile, applied directly | MPL-2.0 |
 | `third_party/patches/apple-private-apis/fallible-gsa-token-header-parsing.patch` | corten-matrix commit `64f9d73` (the public tree matching the 1.3.2 release) | MPL-2.0 |
 | `scripts/macoun-prepare-rustpush.sh` | The patch set is taken from the `ensure-rustpush-source` target of corten-matrix `64f9d73`'s Makefile, plus one macoun-matrix patch (`pub mod activation`) | MPL-2.0 |
-| `pkg/connector/idskeys.go`, its test, the outbound rich-link fix in `pkg/connector/client.go`, `pkg/connector/outbound_richlink_test.go`, the anisette source selection in `pkg/rustpushgo/src/anisette.rs`, `docker/`, `scripts/macoun-build-linux.sh` | Written for macoun-matrix | MPL-2.0 |
+| `pkg/connector/idskeys.go`, `macoun_limiter_store.go` and their tests (written independently), the outbound rich-link fix in `pkg/connector/client.go`, `pkg/connector/outbound_richlink_test.go`, the anisette source selection in `pkg/rustpushgo/src/anisette.rs`, `docker/`, `scripts/macoun-build-linux.sh` | Written for macoun-matrix | MPL-2.0 |
 
 The e2adc79d92 commit predates corten-matrix's move to MPL-2.0 (commit
 `f84bc7eb04`, 2026-06-26), so code taken from it stays under AGPL-3.0. Because
