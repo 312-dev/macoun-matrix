@@ -1,3 +1,37 @@
+# macoun-matrix
+
+**macoun-matrix is a fork of corten-matrix** (below), built from the
+public MPL-2.0 source for Linux amd64 without corten-matrix's closed parts.
+Provenance and licences are in [NOTICE.md](NOTICE.md). Everything after this section is the
+upstream corten-matrix README, kept unchanged; where it says building from
+source is unsupported, that is upstream's position.
+
+What differs from upstream:
+
+- **NAC validation data comes from a Mac** running `tools/nac-relay`
+  (corten-matrix's relay-era relay, AGPL-3.0). The hardware key carries
+  `nac_relay_url` / `relay_token` / `relay_cert_fp` (written by
+  `tools/extract-key -relay ...`), or set `MACOUN_NAC_RELAY_URL`,
+  `MACOUN_NAC_RELAY_TOKEN` and `MACOUN_NAC_RELAY_CERT_FP` (SHA-256 hex of the
+  relay's DER certificate) to point an existing login at a relay.
+- **Anisette comes from an anisette v3 server** (rustpush's open
+  `remote-anisette-v3` client). Set `MACOUN_ANISETTE_URL` to a self-hosted
+  [anisette-v3-server](https://github.com/Dadoum/anisette-v3-server); unset, it
+  falls back to SideStore's public `https://ani.sidestore.io`.
+- **Outbound limiter** in `pkg/connector/idskeys.go` instead of the closed
+  one; `MACOUN_OUTBOUND_LIMIT=off` disables it.
+- **No self-update** (`pkg/connector/hostcmd.go` is the public stub).
+- Outbound text with no real link preview is sent as plain text (the
+  "vanishing message" fix that upstream shipped in 2.0.5).
+
+Build (Linux amd64, Docker): build `docker/Dockerfile.build`, then run
+`scripts/macoun-build-linux.sh` in it with this repository at `/src` and an
+OpenBubbles/rustpush checkout at the pinned SHA, with submodules, at
+`/rustpush`. The binary is `./macoun-matrix`. The Go module path and the
+`cmd/corten-matrix` package keep their upstream names.
+
+---
+
 # Corten-Matrix
 
 A Matrix–iMessage puppeting bridge built on [rustpush](https://github.com/OpenBubbles/rustpush) — like its namesake steel, the oxidation is the protective layer. Send and receive iMessages from any Matrix client.
