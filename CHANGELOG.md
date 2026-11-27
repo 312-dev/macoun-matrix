@@ -18,6 +18,9 @@
 * Fixed a contact's avatar being set again in every shared room whenever an
   external CardDAV server (seen with Google) served the same photo in a
   different encoding.
+* Fixed a contact who shares an iMessage name and photo switching to them
+  and back on every bridge restart. The cached shared profiles are now
+  applied after the first contact sync.
 
 # v0.1.0 (2026-11-26)
 
