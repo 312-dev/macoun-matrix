@@ -337,23 +337,32 @@ func (c *IMClient) lookupSharedProfile(identifier string) *rustpushgo.WrappedPro
 	return nil
 }
 
-// refreshSharedProfilesOnConnect runs the startup share-profile refresh
-// independently of CardDAV: first pushes every cached row to its Matrix
-// ghost (no network — handles warm restarts), then re-fetches each row
-// from CloudKit so profile edits we missed while offline propagate. The
-// CloudKit fetch only needs ProfilesClient (keychain), not contacts.
-// periodicCloudContactSync re-runs refreshAllSharedProfiles on each tick
-// so we keep one ticker but don't gate the share-profile path behind
-// CardDAV success (which can lag for minutes if MobileMe delegate
-// expired and we're on the retry path).
+// refreshSharedProfilesOnConnect runs the startup share-profile refresh:
+// first pushes every cached row to its Matrix ghost (no network; handles
+// warm restarts), then re-fetches each row from CloudKit so profile edits we
+// missed while offline propagate. The CloudKit fetch only needs
+// ProfilesClient (keychain), not contacts.
+//
+// The push waits for the first contact sync, at most contactsWaitTimeout.
+// GetUserInfo prefers a contact over a shared profile, but with the contact
+// cache still empty it falls back to the shared profile, so pushing earlier
+// sets a contact's ghost to their shared name and photo and the contact
+// sync then sets it back, an extra change in every room. The wait is bounded
+// because CardDAV can lag for minutes when the MobileMe delegate expired and
+// we're on the retry path. periodicCloudContactSync re-runs
+// refreshAllSharedProfiles on each tick.
 func (c *IMClient) refreshSharedProfilesOnConnect(log zerolog.Logger) {
+	if !c.waitForContactsReady(log, "shared-profile reapply") {
+		return
+	}
 	c.applyCachedSharedProfilesToGhosts(log)
 	c.refreshAllSharedProfiles(log)
 }
 
 // applyCachedSharedProfilesToGhosts pushes every cached shared profile to
 // its corresponding Matrix ghost without any CloudKit fetch. Runs once on
-// connect so warm restarts re-render names + avatars immediately.
+// connect, after the first contact sync, so warm restarts re-render names and
+// avatars without waiting for a CloudKit round trip.
 func (c *IMClient) applyCachedSharedProfilesToGhosts(log zerolog.Logger) {
 	applied := 0
 	c.sharedProfiles.Range(func(key, _ any) bool {

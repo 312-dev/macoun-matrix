@@ -1912,12 +1912,16 @@ func (c *IMClient) refreshDMPortalNamesFromContacts(log zerolog.Logger) {
 	log.Info().Int("updated", updated).Int("total_dms", total).Msg("Refreshed DM titles (focus moon) from contacts")
 }
 
-// contactsWaitTimeout is how long CloudKit sync waits for the contacts
+// contactsWaitTimeout is how long a startup task waits for the contacts
 // readiness gate before proceeding without contacts. Contacts are nice-to-have
-// for name resolution but shouldn't block backfill indefinitely.
+// for name resolution but shouldn't block backfill or profile refresh
+// indefinitely.
 const contactsWaitTimeout = 30 * time.Second
 
-func (c *IMClient) waitForContactsReady(log zerolog.Logger) bool {
+// waitForContactsReady blocks until the first contact sync lands, at most
+// contactsWaitTimeout. It returns false only when the client is stopping.
+// purpose names the waiting task in the log.
+func (c *IMClient) waitForContactsReady(log zerolog.Logger, purpose string) bool {
 	c.contactsReadyLock.RLock()
 	alreadyReady := c.contactsReady
 	readyCh := c.contactsReadyCh
@@ -1926,13 +1930,13 @@ func (c *IMClient) waitForContactsReady(log zerolog.Logger) bool {
 		return true
 	}
 
-	log.Info().Dur("timeout", contactsWaitTimeout).Msg("Waiting for contacts readiness gate before CloudKit sync")
+	log.Info().Dur("timeout", contactsWaitTimeout).Str("for", purpose).Msg("Waiting for contacts readiness gate")
 	select {
 	case <-readyCh:
-		log.Info().Msg("Contacts readiness gate opened")
+		log.Info().Str("for", purpose).Msg("Contacts readiness gate opened")
 		return true
 	case <-time.After(contactsWaitTimeout):
-		log.Warn().Msg("Contacts readiness timed out — proceeding with CloudKit sync without contacts")
+		log.Warn().Str("for", purpose).Msg("Contacts readiness timed out, proceeding without contacts")
 		return true
 	case <-c.stopChan:
 		return false
@@ -2061,7 +2065,7 @@ func (c *IMClient) runCloudSyncController(log zerolog.Logger) {
 	}()
 	defer cancel()
 	controllerStart := time.Now()
-	if !c.waitForContactsReady(log) {
+	if !c.waitForContactsReady(log, "CloudKit sync") {
 		c.setCloudSyncDone() // unblock APNs portal creation
 		return
 	}
