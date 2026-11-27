@@ -128,21 +128,29 @@ func (c *externalCardDAVClient) SyncContacts(log zerolog.Logger) error {
 	// Step 4.5: Download any photo URLs (e.g. Google uses URL-based PHOTO fields)
 	downloadContactPhotos(allContacts, log)
 
-	phoneKeys, emailKeys := c.storeContacts(allContacts)
+	phoneKeys, emailKeys, keptPhotos := c.storeContacts(allContacts)
 
 	log.Info().
 		Int("contacts", len(allContacts)).
 		Int("phone_keys", phoneKeys).
 		Int("email_keys", emailKeys).
+		Int("reencoded_photos_kept", keptPhotos).
 		Msg("Contact cache synced from external CardDAV")
 	return nil
 }
 
 // storeContacts replaces the lookup caches with a fresh sync's contacts and
-// returns the number of phone and email keys indexed.
-func (c *externalCardDAVClient) storeContacts(allContacts []*imessage.Contact) (phoneKeys, emailKeys int) {
+// returns the number of phone and email keys indexed. A photo that is only a
+// re-encode of the cached one keeps the cached bytes (macoun_contact_photo.go);
+// keptPhotos counts those.
+func (c *externalCardDAVClient) storeContacts(allContacts []*imessage.Contact) (phoneKeys, emailKeys, keptPhotos int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	oldPhone, oldEmail := c.byPhone, c.byEmail
+	keptPhotos = keepEquivalentPhotos(allContacts, func(ct *imessage.Contact) *imessage.Contact {
+		return previousContact(oldPhone, oldEmail, ct)
+	})
 
 	c.byPhone = make(map[string]*imessage.Contact, len(allContacts)*2)
 	c.byEmail = make(map[string]*imessage.Contact, len(allContacts))
@@ -159,7 +167,7 @@ func (c *externalCardDAVClient) storeContacts(allContacts []*imessage.Contact) (
 		}
 	}
 	c.lastSync = time.Now()
-	return len(c.byPhone), len(c.byEmail)
+	return len(c.byPhone), len(c.byEmail), keptPhotos
 }
 
 // GetContactInfo looks up a contact by phone number or email.
