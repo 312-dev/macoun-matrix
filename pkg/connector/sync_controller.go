@@ -1848,8 +1848,9 @@ func (c *IMClient) refreshDMPortalNamesFromContacts(log zerolog.Logger) {
 		// false); dmFocusName now re-stamps the contact name, healing it.
 		// Leave pristine, never-named DMs (NameSet=false) on implicit naming —
 		// stamping those would mass-seize NameIsCustom (and freeze ghost avatars)
-		// across every DM on the first tick.
-		broken := portal.NameSet && portal.Name == ""
+		// across every DM on the first tick. A DM whose implicit name or avatar
+		// never landed also counts as broken (dmRoomMetaUnsent).
+		broken := (portal.NameSet && portal.Name == "") || dmRoomMetaUnsent(portal)
 		if !c.isPortalSilenced(ctx, portal.ID) && !portal.NameIsCustom && !broken {
 			continue
 		}
