@@ -1667,11 +1667,9 @@ func (c *IMClient) Connect(ctx context.Context) {
 		log.Warn().Err(err).Msg("Failed to ensure shared_profiles schema")
 	} else {
 		c.loadSharedProfilesIntoCache(context.Background(), log)
-		// Independent of CardDAV: push cached state to ghosts immediately
-		// and re-fetch each row from CloudKit. Decoupled from
-		// setContactsReady so a slow MobileMe-delegate retry doesn't gate
-		// the share-profile path (it only depends on ProfilesClient /
-		// keychain init, not on contacts).
+		// Push cached state to ghosts once the first contact sync lands
+		// (bounded by contactsWaitTimeout, so a slow MobileMe-delegate retry
+		// doesn't hold it up) and re-fetch each row from CloudKit.
 		go c.refreshSharedProfilesOnConnect(log)
 	}
 
