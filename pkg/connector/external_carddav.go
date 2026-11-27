@@ -128,7 +128,19 @@ func (c *externalCardDAVClient) SyncContacts(log zerolog.Logger) error {
 	// Step 4.5: Download any photo URLs (e.g. Google uses URL-based PHOTO fields)
 	downloadContactPhotos(allContacts, log)
 
-	// Step 5: Build lookup caches
+	phoneKeys, emailKeys := c.storeContacts(allContacts)
+
+	log.Info().
+		Int("contacts", len(allContacts)).
+		Int("phone_keys", phoneKeys).
+		Int("email_keys", emailKeys).
+		Msg("Contact cache synced from external CardDAV")
+	return nil
+}
+
+// storeContacts replaces the lookup caches with a fresh sync's contacts and
+// returns the number of phone and email keys indexed.
+func (c *externalCardDAVClient) storeContacts(allContacts []*imessage.Contact) (phoneKeys, emailKeys int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -147,13 +159,7 @@ func (c *externalCardDAVClient) SyncContacts(log zerolog.Logger) error {
 		}
 	}
 	c.lastSync = time.Now()
-
-	log.Info().
-		Int("contacts", len(allContacts)).
-		Int("phone_keys", len(c.byPhone)).
-		Int("email_keys", len(c.byEmail)).
-		Msg("Contact cache synced from external CardDAV")
-	return nil
+	return len(c.byPhone), len(c.byEmail)
 }
 
 // GetContactInfo looks up a contact by phone number or email.
