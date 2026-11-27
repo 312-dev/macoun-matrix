@@ -202,8 +202,8 @@ iMessage bubble effects (Slam, Loud, Gentle, Invisible Ink) and screen effects
 Shooting Star) are bridged both ways through one content key on the message,
 `com.beeper.imessage.effect`, whose value is Apple's effect id (the key Beeper's
 iMessage bridge uses). The text is unchanged; invisible ink also arrives as a
-Matrix spoiler. To send one, set the key on an outgoing text message. Effects
-on outgoing attachments and SMS are not sent. Ids, examples and limits:
+Matrix spoiler. To send one, set the key on an outgoing text message or
+attachment. Effects on SMS are not sent. Ids, examples and limits:
 [effects.md](effects.md).
 
 ## FaceTime
