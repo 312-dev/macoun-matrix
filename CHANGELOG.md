@@ -15,6 +15,9 @@
 * Fixed group ghosts being removed from a room whose stored roster was unknown.
 * Fixed starting a chat through the provisioning API with a bare phone number
   or email (no `tel:` or `mailto:`) failing with IDS error 6001.
+* Fixed a contact's avatar being set again in every shared room whenever an
+  external CardDAV server (seen with Google) served the same photo in a
+  different encoding.
 
 # v0.1.0 (2026-11-26)
 
