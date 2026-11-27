@@ -22,7 +22,7 @@ supported by Apple Inc. or the Corten-Matrix Project.
 | Images, video, audio, files, voice messages | yes | yes |
 | Replies | yes | yes |
 | Reactions (tapbacks) | yes | yes |
-| Bubble and screen effects ([docs/effects.md](docs/effects.md)) | yes, text only | yes |
+| Bubble and screen effects ([docs/effects.md](docs/effects.md)) | yes, not on SMS | yes |
 | Edits | yes | yes |
 | Unsend / redaction | yes | yes |
 | Read receipts | yes | yes |
