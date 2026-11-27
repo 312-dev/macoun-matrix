@@ -3768,7 +3768,7 @@ func (c *IMClient) handleMessage(log zerolog.Logger, msg rustpushgo.WrappedMessa
 			},
 			Data:               &msg,
 			ID:                 makeMessageID(msg.Uuid),
-			ConvertMessageFunc: convertMessage,
+			ConvertMessageFunc: c.convertMessageWithMentions,
 		})
 	}
 
