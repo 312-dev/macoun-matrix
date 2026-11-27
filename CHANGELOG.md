@@ -21,6 +21,11 @@
 * Fixed a contact who shares an iMessage name and photo switching to them
   and back on every bridge restart. The cached shared profiles are now
   applied after the first contact sync.
+* Added iMessage formatting and mentions on incoming messages: bold, italic,
+  underline and strikethrough arrive as HTML, and a mention becomes a Matrix
+  mention of that person. Mentions sent from Matrix still go out as text.
+* Fixed the first chat with a new contact sometimes having no room name, which
+  made clients list its members, bridge bot included, like a group.
 
 # v0.1.0 (2026-11-26)
 

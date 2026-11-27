@@ -19,6 +19,7 @@ supported by Apple Inc. or the Corten-Matrix Project.
 | Feature | Matrix to iMessage | iMessage to Matrix |
 |---|---|---|
 | Text, with formatting | yes | yes |
+| Mentions | no, sent as text | yes |
 | Images, video, audio, files, voice messages | yes | yes |
 | Replies | yes | yes |
 | Reactions (tapbacks) | yes | yes |
