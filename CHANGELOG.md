@@ -23,7 +23,11 @@
   applied after the first contact sync.
 * Added iMessage formatting and mentions on incoming messages: bold, italic,
   underline and strikethrough arrive as HTML, and a mention becomes a Matrix
-  mention of that person. Mentions sent from Matrix still go out as text.
+  mention of that person.
+* Added mentions on messages and edits sent from Matrix: a mention of a
+  bridged contact becomes an iMessage mention. Not on SMS.
+* Fixed bold, italic, underline and strikethrough from Matrix being sent to
+  iMessage as plain text.
 * Fixed the first chat with a new contact sometimes having no room name, which
   made clients list its members, bridge bot included, like a group.
 
