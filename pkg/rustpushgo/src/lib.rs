@@ -3601,8 +3601,38 @@ fn html_escape(s: &str) -> String {
      .replace('"', "&quot;")
 }
 
+/// Split the HTML envelope off an edit's text: "\x00HT\x01<html>\x00<text>".
+/// send_edit's FFI signature carries text only, so the Go side
+/// (outboundEditText in macoun_outbound_html.go) puts the edit's HTML in front
+/// of it, the same way the effect and link-preview envelopes ride on
+/// send_message's text. Text without a well-formed envelope is returned as is.
+fn split_html_envelope(s: &str) -> (Option<String>, String) {
+    if let Some(rest) = s.strip_prefix("\x00HT\x01") {
+        if let Some((html, text)) = rest.split_once('\x00') {
+            return (Some(html.to_string()), text.to_string());
+        }
+    }
+    (None, s.to_string())
+}
+
+/// Decode the entities the Matrix side escapes in text and attributes.
+fn html_unescape(s: &str) -> String {
+    s.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&amp;", "&")
+}
+
 /// Parse Matrix HTML into iMessage MessageParts with formatting.
-/// Returns None if no formatting tags are found (plain text fallback).
+/// Returns None if no formatting tags or mentions are found (plain text
+/// fallback).
+///
+/// Besides b/i/u/strike and br, it reads `<mention uri="tel:+1...">Name</mention>`,
+/// which is not Matrix HTML: the Go side (macoun_outbound_html.go) rewrites
+/// each resolvable matrix.to pill into it before the send, since only the
+/// bridge knows which iMessage handle a Matrix user stands for. Each one
+/// becomes a MessagePart::Mention, the part iOS shows as a mention.
 fn parse_html_to_parts(html: &str, plain_text: &str) -> Option<MessageParts> {
     if !html.contains('<') {
         return None;
@@ -3616,6 +3646,8 @@ fn parse_html_to_parts(html: &str, plain_text: &str) -> Option<MessageParts> {
     let mut italic = false;
     let mut underline = false;
     let mut strikethrough = false;
+    // Inside a <mention>: its handle URI and the text collected so far.
+    let mut mention: Option<(String, String)> = None;
 
     while pos < len {
         if bytes[pos] == b'<' {
@@ -3623,7 +3655,33 @@ fn parse_html_to_parts(html: &str, plain_text: &str) -> Option<MessageParts> {
                 Some(e) => pos + e + 1,
                 None => break,
             };
-            let tag_content = &html[pos + 1..tag_end - 1].trim().to_lowercase();
+            let raw_tag = html[pos + 1..tag_end - 1].trim();
+            let tag_content = &raw_tag.to_lowercase();
+            if tag_content.starts_with("mention ") {
+                // The URI is read from the raw tag: lowercasing would change
+                // the local part of a mailto: handle.
+                let uri = raw_tag
+                    .split_once("uri=\"")
+                    .and_then(|(_, rest)| rest.split_once('"'))
+                    .map(|(v, _)| html_unescape(v));
+                if let Some(uri) = uri {
+                    mention = Some((uri, String::new()));
+                }
+                pos = tag_end;
+                continue;
+            }
+            if tag_content == "/mention" {
+                if let Some((uri, text)) = mention.take() {
+                    let display = text.strip_prefix('@').unwrap_or(&text).to_string();
+                    parts.push(IndexedMessagePart {
+                        part: MessagePart::Mention(uri, display),
+                        idx: None,
+                        ext: None,
+                    });
+                }
+                pos = tag_end;
+                continue;
+            }
             match tag_content.as_str() {
                 "strong" | "b" => bold = true,
                 "/strong" | "/b" => bold = false,
@@ -3649,12 +3707,10 @@ fn parse_html_to_parts(html: &str, plain_text: &str) -> Option<MessageParts> {
         } else {
             let next_tag = html[pos..].find('<').map(|i| pos + i).unwrap_or(len);
             let chunk = &html[pos..next_tag];
-            let decoded = chunk
-                .replace("&amp;", "&")
-                .replace("&lt;", "<")
-                .replace("&gt;", ">")
-                .replace("&quot;", "\"");
-            if !decoded.is_empty() {
+            let decoded = html_unescape(chunk);
+            if let Some((_, text)) = mention.as_mut() {
+                text.push_str(&decoded);
+            } else if !decoded.is_empty() {
                 let flags = TextFlags { bold, italic, underline, strikethrough };
                 parts.push(IndexedMessagePart {
                     part: MessagePart::Text(decoded, TextFormat::Flags(flags)),
@@ -3670,15 +3726,66 @@ fn parse_html_to_parts(html: &str, plain_text: &str) -> Option<MessageParts> {
         return None;
     }
 
+    let has_mention = parts.iter().any(|p| matches!(&p.part, MessagePart::Mention(_, _)));
     let reconstructed: String = parts.iter().map(|p| match &p.part {
         MessagePart::Text(t, _) => t.as_str(),
         _ => "",
     }).collect();
-    if reconstructed == plain_text && !parts.iter().any(|p| matches!(&p.part, MessagePart::Text(_, TextFormat::Flags(f)) if f.bold || f.italic || f.underline || f.strikethrough)) {
+    if !has_mention && reconstructed == plain_text && !parts.iter().any(|p| matches!(&p.part, MessagePart::Text(_, TextFormat::Flags(f)) if f.bold || f.italic || f.underline || f.strikethrough)) {
         return None;
     }
 
     Some(MessageParts(parts))
+}
+
+#[cfg(test)]
+mod macoun_html_parts_tests {
+    use super::*;
+
+    fn summary(parts: &MessageParts) -> Vec<String> {
+        parts.0.iter().map(|p| match &p.part {
+            MessagePart::Text(t, TextFormat::Flags(f)) => {
+                format!("text:{}:{}{}", t, if f.bold { "b" } else { "" }, if f.italic { "i" } else { "" })
+            }
+            MessagePart::Text(t, _) => format!("text:{}:", t),
+            MessagePart::Mention(uri, name) => format!("mention:{}:{}", uri, name),
+            _ => "other".to_string(),
+        }).collect()
+    }
+
+    #[test]
+    fn macoun_mention_becomes_mention_part() {
+        let html = r#"hi <mention uri="tel:+15551234567">@Sam</mention>, see you"#;
+        let parts = parse_html_to_parts(html, "hi Sam, see you").expect("parts");
+        assert_eq!(summary(&parts), vec![
+            "text:hi :", "mention:tel:+15551234567:Sam", "text:, see you:",
+        ]);
+    }
+
+    #[test]
+    fn macoun_mention_keeps_mailto_case_and_unescapes() {
+        let html = r#"<mention uri="mailto:Jo.Smith@Example.com">Jo &amp; Co</mention>"#;
+        let parts = parse_html_to_parts(html, "Jo & Co").expect("parts");
+        assert_eq!(summary(&parts), vec!["mention:mailto:Jo.Smith@Example.com:Jo & Co"]);
+    }
+
+    #[test]
+    fn macoun_edit_html_envelope_split() {
+        let (html, text) = split_html_envelope("\x00HT\x01<b>hi</b>\x00hi");
+        assert_eq!(html.as_deref(), Some("<b>hi</b>"));
+        assert_eq!(text, "hi");
+        assert_eq!(split_html_envelope("plain"), (None, "plain".to_string()));
+        // An unterminated envelope is not trusted: the whole string is text.
+        let broken = "\x00HT\x01<b>no end";
+        assert_eq!(split_html_envelope(broken), (None, broken.to_string()));
+    }
+
+    #[test]
+    fn macoun_formatting_without_mentions_unchanged() {
+        assert!(parse_html_to_parts("plain <p>text</p>", "plain text").is_none());
+        let parts = parse_html_to_parts("<b>bold</b> it&#39;s", "bold it's").expect("parts");
+        assert_eq!(summary(&parts), vec!["text:bold:b", "text: it's:"]);
+    }
 }
 
 /// Lift a ShareProfileMessage onto a WrappedMessage's share-profile keys.
@@ -9836,17 +9943,21 @@ impl Client {
         handle: String,
     ) -> Result<String, WrappedError> {
         let conv: ConversationData = (&conversation).into();
+        let (html, new_text) = split_html_envelope(&new_text);
+        let new_parts = html
+            .and_then(|h| parse_html_to_parts(&h, &new_text))
+            .unwrap_or_else(|| MessageParts(vec![IndexedMessagePart {
+                part: MessagePart::Text(new_text, Default::default()),
+                idx: None,
+                ext: None,
+            }]));
         let mut msg = MessageInst::new(
             conv,
             &handle,
             Message::Edit(EditMessage {
                 tuuid: target_uuid,
                 edit_part,
-                new_parts: MessageParts(vec![IndexedMessagePart {
-                    part: MessagePart::Text(new_text, Default::default()),
-                    idx: None,
-                    ext: None,
-                }]),
+                new_parts,
             }),
         );
         self.send_with_flap_retry(&mut msg).await

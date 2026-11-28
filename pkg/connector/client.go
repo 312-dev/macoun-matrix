@@ -6523,7 +6523,8 @@ func (c *IMClient) HandleMatrixMessage(ctx context.Context, msg *bridgev2.Matrix
 		rawContent = msg.Event.Content.Raw
 	}
 	first := outboundTextWithEffect(ctx, rawContent, conv.IsSms, outbound[0])
-	uuid, err := c.client.SendMessage(conv, first, nil, c.handle, replyGuid, replyPart, nil)
+	formatted := c.outboundHTML(ctx, msg.Content, conv.IsSms, textToSend, len(outbound))
+	uuid, err := c.client.SendMessage(conv, first, formatted, c.handle, replyGuid, replyPart, nil)
 	if err != nil {
 		// rustpush retried an unreachable iMessage as SMS and found no relay to
 		// carry it. Surface the same explanation as the pre-send guard rather than
@@ -6992,8 +6993,11 @@ func (c *IMClient) HandleMatrixEdit(ctx context.Context, msg *bridgev2.MatrixEdi
 			Msg("Editing only the first chunk of a message that was split across several iMessages")
 	}
 
+	// The edit keeps the new content's mentions and formatting, under the same
+	// rules as a send (outboundHTML); conv.IsSms is already ruled out above.
+	formatted := c.outboundHTML(ctx, msg.Content, false, msg.Content.Body, 1)
 	// Rust-side retry handles SendTimedOut with stable UUID.
-	_, err := c.client.SendEdit(conv, targetGUID, 0, msg.Content.Body, c.handle)
+	_, err := c.client.SendEdit(conv, targetGUID, 0, outboundEditText(formatted, msg.Content.Body), c.handle)
 	if err == nil {
 		// Work around mautrix-go bridgev2 not incrementing EditCount before saving.
 		msg.EditTarget.EditCount++
